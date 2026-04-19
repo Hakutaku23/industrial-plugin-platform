@@ -371,6 +371,11 @@ button:disabled {
   gap: 8px;
 }
 
+.run-history-item {
+  display: grid;
+  gap: 8px;
+}
+
 .run-history-row {
   display: grid;
   grid-template-columns: 90px 110px minmax(150px, 1fr) minmax(180px, 1.2fr);

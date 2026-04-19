@@ -11,6 +11,7 @@ from platform_api.services.execution import (
 )
 from platform_api.services.metadata_store import MetadataStore
 from platform_api.services.package_storage import PackageStorage, PackageStorageError
+from platform_api.services.scheduler import scheduler
 
 router = APIRouter(prefix="/api/v1")
 
@@ -56,6 +57,14 @@ class InstanceScheduleRequest(BaseModel):
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/scheduler/status")
+def scheduler_status() -> dict[str, object]:
+    return {
+        "enabled": settings.scheduler.enabled,
+        **scheduler.status_snapshot(),
+    }
 
 
 @router.post("/packages", status_code=status.HTTP_201_CREATED)

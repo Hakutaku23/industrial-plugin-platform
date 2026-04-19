@@ -92,6 +92,43 @@ export interface DataSourceRecord {
   updated_at: string
 }
 
+export type BindingType = 'single' | 'batch'
+
+export interface SingleInputBinding {
+  binding_type?: 'single'
+  input_name: string
+  data_source_id: number
+  source_tag: string
+}
+
+export interface BatchInputBinding {
+  binding_type: 'batch'
+  input_name: string
+  data_source_id: number
+  source_tags: string[]
+  output_format?: 'named-map' | 'ordered-list'
+}
+
+export type InputBinding = SingleInputBinding | BatchInputBinding
+
+export interface SingleOutputBinding {
+  binding_type?: 'single'
+  output_name: string
+  data_source_id: number
+  target_tag: string
+  dry_run?: boolean
+}
+
+export interface BatchOutputBinding {
+  binding_type: 'batch'
+  output_name: string
+  data_source_id: number
+  target_tags: string[]
+  dry_run?: boolean
+}
+
+export type OutputBinding = SingleOutputBinding | BatchOutputBinding
+
 export interface PluginInstanceRecord {
   id: number
   name: string
@@ -99,8 +136,8 @@ export interface PluginInstanceRecord {
   version_id: number
   package_name: string
   version: string
-  input_bindings: Record<string, unknown>[]
-  output_bindings: Record<string, unknown>[]
+  input_bindings: InputBinding[]
+  output_bindings: OutputBinding[]
   config: Record<string, unknown>
   writeback_enabled: boolean
   schedule_enabled: boolean
@@ -284,8 +321,8 @@ export async function saveInstance(payload: {
   name: string
   package_name: string
   version: string
-  input_bindings: Record<string, unknown>[]
-  output_bindings: Record<string, unknown>[]
+  input_bindings: InputBinding[]
+  output_bindings: OutputBinding[]
   config: Record<string, unknown>
   writeback_enabled: boolean
   schedule_enabled: boolean

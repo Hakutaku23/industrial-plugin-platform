@@ -1,4 +1,5 @@
 import json
+import math
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -264,6 +265,7 @@ class MetadataStore:
                 if name not in existing_runs:
                     connection.exec_driver_sql(f"ALTER TABLE plugin_runs ADD COLUMN {ddl}")
 
+    # ---------- package / version / audit ----------
     def register_package_upload(
         self,
         record: PackageRecord,
@@ -531,6 +533,7 @@ class MetadataStore:
                 "updated_at": plugin_version.updated_at.isoformat(),
             }
 
+    # ---------- run / logs ----------
     def record_plugin_run(
         self,
         *,
@@ -670,6 +673,7 @@ class MetadataStore:
                 for row in rows
             ]
 
+    # ---------- data sources ----------
     def upsert_data_source(
         self,
         *,
@@ -770,6 +774,7 @@ class MetadataStore:
             row.updated_at = datetime.now(UTC)
             session.commit()
 
+    # ---------- instances ----------
     def upsert_plugin_instance(
         self,
         *,
@@ -798,6 +803,7 @@ class MetadataStore:
                 return None
 
             package, plugin_version = version_row
+            normalized_interval = self._normalize_schedule_interval(schedule_interval_sec)
             instance = session.scalar(select(PluginInstanceModel).where(PluginInstanceModel.name == name))
             if instance is None:
                 instance = PluginInstanceModel(
@@ -809,12 +815,8 @@ class MetadataStore:
                     config_json=json.dumps(config, ensure_ascii=False, sort_keys=True),
                     writeback_enabled=1 if writeback_enabled else 0,
                     schedule_enabled=1 if schedule_enabled else 0,
-                    schedule_interval_sec=self._normalize_schedule_interval(schedule_interval_sec),
-                    next_scheduled_run_at=self._next_schedule_time(
-                        now,
-                        schedule_enabled,
-                        schedule_interval_sec,
-                    ),
+                    schedule_interval_sec=normalized_interval,
+                    next_scheduled_run_at=self._next_schedule_time(now, schedule_enabled, normalized_interval),
                     status="scheduled" if schedule_enabled else "configured",
                     created_at=now,
                     updated_at=now,
@@ -829,12 +831,8 @@ class MetadataStore:
                 instance.config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
                 instance.writeback_enabled = 1 if writeback_enabled else 0
                 instance.schedule_enabled = 1 if schedule_enabled else 0
-                instance.schedule_interval_sec = self._normalize_schedule_interval(schedule_interval_sec)
-                instance.next_scheduled_run_at = self._next_schedule_time(
-                    now,
-                    schedule_enabled,
-                    instance.schedule_interval_sec,
-                )
+                instance.schedule_interval_sec = normalized_interval
+                instance.next_scheduled_run_at = self._next_schedule_time(now, schedule_enabled, normalized_interval)
                 instance.status = "scheduled" if schedule_enabled else "configured"
                 instance.updated_at = now
 
@@ -888,6 +886,7 @@ class MetadataStore:
                 return None
 
             package, plugin_version = version_row
+            normalized_interval = self._normalize_schedule_interval(schedule_interval_sec)
             instance.name = name
             instance.package_id = package.id
             instance.version_id = plugin_version.id
@@ -896,12 +895,8 @@ class MetadataStore:
             instance.config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
             instance.writeback_enabled = 1 if writeback_enabled else 0
             instance.schedule_enabled = 1 if schedule_enabled else 0
-            instance.schedule_interval_sec = self._normalize_schedule_interval(schedule_interval_sec)
-            instance.next_scheduled_run_at = self._next_schedule_time(
-                now,
-                schedule_enabled,
-                instance.schedule_interval_sec,
-            )
+            instance.schedule_interval_sec = normalized_interval
+            instance.next_scheduled_run_at = self._next_schedule_time(now, schedule_enabled, normalized_interval)
             instance.status = "scheduled" if schedule_enabled else "configured"
             instance.updated_at = now
 
@@ -1044,6 +1039,7 @@ class MetadataStore:
                         "id": row.id,
                         "name": row.name,
                         "schedule_interval_sec": row.schedule_interval_sec,
+                        "scheduled_at": row.next_scheduled_run_at.isoformat() if row.next_scheduled_run_at else None,
                     }
                 )
             session.commit()
@@ -1056,10 +1052,14 @@ class MetadataStore:
             if row is None:
                 return
 
-            row.last_scheduled_run_at = finished_at
+            interval = self._normalize_schedule_interval(row.schedule_interval_sec)
+            previous_due = row.next_scheduled_run_at
+            row.last_scheduled_run_at = previous_due or finished_at
             if row.schedule_enabled:
-                row.next_scheduled_run_at = finished_at + timedelta(
-                    seconds=self._normalize_schedule_interval(row.schedule_interval_sec)
+                row.next_scheduled_run_at = self._advance_schedule_time(
+                    previous_due=previous_due,
+                    reference=finished_at,
+                    interval_sec=interval,
                 )
                 row.status = "scheduled"
             else:
@@ -1143,6 +1143,7 @@ class MetadataStore:
                 for row in rows
             ]
 
+    # ---------- helpers ----------
     def _get_or_create_package(
         self,
         session: Session,
@@ -1222,4 +1223,31 @@ class MetadataStore:
     ) -> datetime | None:
         if not schedule_enabled:
             return None
-        return now + timedelta(seconds=self._normalize_schedule_interval(interval_sec))
+        return self._align_to_interval_boundary(now, self._normalize_schedule_interval(interval_sec))
+
+    def _align_to_interval_boundary(self, reference: datetime, interval_sec: int) -> datetime:
+        reference = self._as_db_time(reference)
+        interval = self._normalize_schedule_interval(interval_sec)
+        ts = reference.timestamp()
+        next_ts = math.floor(ts / interval) * interval + interval
+        return datetime.fromtimestamp(next_ts, tz=UTC).replace(tzinfo=None)
+
+    def _advance_schedule_time(
+        self,
+        *,
+        previous_due: datetime | None,
+        reference: datetime,
+        interval_sec: int,
+    ) -> datetime:
+        reference = self._as_db_time(reference)
+        previous_due = self._as_db_time(previous_due) if previous_due else None
+        interval = timedelta(seconds=self._normalize_schedule_interval(interval_sec))
+        next_due = previous_due or self._align_to_interval_boundary(reference, interval_sec)
+        while next_due <= reference:
+            next_due += interval
+        return next_due
+
+    def _as_db_time(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(UTC).replace(tzinfo=None)

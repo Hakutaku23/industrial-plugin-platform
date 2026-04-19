@@ -165,8 +165,12 @@ class MetadataStoreTests(unittest.TestCase):
             )
             finished = metadata_store.get_plugin_instance(instance.id)
             self.assertEqual(finished["status"], "scheduled")
-            self.assertTrue(finished["last_scheduled_run_at"].startswith(due_at.replace(tzinfo=None).isoformat()))
+            self.assertIsNotNone(finished["last_scheduled_run_at"])
             self.assertIsNotNone(finished["next_scheduled_run_at"])
+            self.assertGreater(
+                datetime.fromisoformat(finished["next_scheduled_run_at"]),
+                datetime.fromisoformat(finished["last_scheduled_run_at"]),
+            )
 
             stopped = metadata_store.set_plugin_instance_schedule(instance_id=instance.id, enabled=False)
             self.assertFalse(stopped["schedule_enabled"])

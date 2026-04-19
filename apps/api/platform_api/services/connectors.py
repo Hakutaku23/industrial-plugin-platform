@@ -1,7 +1,5 @@
 from typing import Any
 
-from platform_api.services.metadata_store import MetadataStore
-
 
 class ConnectorError(RuntimeError):
     """Raised when a connector cannot read or write a requested tag."""
@@ -14,15 +12,27 @@ class Connector:
     def write_tag(self, tag: str, value: Any) -> None:
         raise NotImplementedError
 
+    def read_tags(self, tags: list[str]) -> dict[str, Any]:
+        return {tag: self.read_tag(tag) for tag in tags}
+
+    def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        for tag, value in values.items():
+            try:
+                self.write_tag(tag, value)
+                results[tag] = {"status": "success", "value": value, "reason": ""}
+            except Exception as exc:  # noqa: BLE001
+                results[tag] = {"status": "failed", "value": value, "reason": str(exc)}
+        return results
+
 
 class MockConnector(Connector):
-    def __init__(self, data_source: dict[str, Any], store: MetadataStore) -> None:
+    def __init__(self, data_source: dict[str, Any], store) -> None:
         self.data_source = data_source
         self.store = store
 
     def read_tag(self, tag: str) -> Any:
         ensure_tag_access(self.data_source, tag, "read")
-
         points = self.data_source["config"].get("points", {})
         if tag not in points:
             raise ConnectorError(f"mock tag not found: {tag}")
@@ -30,7 +40,6 @@ class MockConnector(Connector):
 
     def write_tag(self, tag: str, value: Any) -> None:
         ensure_tag_access(self.data_source, tag, "write")
-
         config = dict(self.data_source["config"])
         points = dict(config.get("points", {}))
         points[tag] = value
@@ -38,12 +47,31 @@ class MockConnector(Connector):
         self.store.update_data_source_config(int(self.data_source["id"]), config)
         self.data_source["config"] = config
 
+    def read_tags(self, tags: list[str]) -> dict[str, Any]:
+        return {tag: self.read_tag(tag) for tag in tags}
+
+    def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        config = dict(self.data_source["config"])
+        points = dict(config.get("points", {}))
+        for tag, value in values.items():
+            try:
+                ensure_tag_access(self.data_source, tag, "write")
+                points[tag] = value
+                results[tag] = {"status": "success", "value": value, "reason": ""}
+            except Exception as exc:  # noqa: BLE001
+                results[tag] = {"status": "failed", "value": value, "reason": str(exc)}
+        config["points"] = points
+        self.store.update_data_source_config(int(self.data_source["id"]), config)
+        self.data_source["config"] = config
+        return results
+
 
 class RedisConnector(Connector):
     def __init__(self, data_source: dict[str, Any]) -> None:
         try:
             import redis
-        except ImportError as exc:
+        except ImportError as exc:  # pragma: no cover
             raise ConnectorError("redis package is not installed in the Python environment") from exc
 
         config = data_source["config"]
@@ -70,11 +98,38 @@ class RedisConnector(Connector):
         ensure_tag_access(self.data_source, tag, "write")
         self.client.set(self._key(tag), value)
 
+    def read_tags(self, tags: list[str]) -> dict[str, Any]:
+        for tag in tags:
+            ensure_tag_access(self.data_source, tag, "read")
+        values = self.client.mget([self._key(tag) for tag in tags])
+        result: dict[str, Any] = {}
+        for tag, value in zip(tags, values):
+            if value is None:
+                raise ConnectorError(f"redis key not found: {tag}")
+            result[tag] = _coerce_scalar(value)
+        return result
+
+    def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        for tag in values:
+            ensure_tag_access(self.data_source, tag, "write")
+        pipe = self.client.pipeline(transaction=False)
+        for tag, value in values.items():
+            pipe.set(self._key(tag), value)
+        executed = pipe.execute()
+        results: dict[str, dict[str, Any]] = {}
+        for (tag, value), ok in zip(values.items(), executed):
+            results[tag] = {
+                "status": "success" if ok else "failed",
+                "value": value,
+                "reason": "" if ok else "redis pipeline set failed",
+            }
+        return results
+
     def _key(self, tag: str) -> str:
         return f"{self.prefix}{tag}"
 
 
-def build_connector(data_source: dict[str, Any], store: MetadataStore) -> Connector:
+def build_connector(data_source: dict[str, Any], store) -> Connector:
     connector_type = data_source["connector_type"]
     if connector_type == "mock":
         return MockConnector(data_source, store)

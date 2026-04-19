@@ -50,23 +50,55 @@ Snake-case compatibility is accepted for imported configs:
 
 An instance may have multiple input bindings and multiple output bindings.
 
-Input binding:
+Single input binding:
 
 ```json
 {
+  "binding_type": "single",
   "input_name": "temperature",
   "data_source_id": 1,
   "source_tag": "sthb:DCS_AO_RTO_014_AI"
 }
 ```
 
-Output binding:
+Batch input binding:
 
 ```json
 {
+  "binding_type": "batch",
+  "input_name": "state_batch",
+  "data_source_id": 1,
+  "source_tags": [
+    "sthb:DCS_AO_RTO_014_AI",
+    "sthb:DCS_AO_RTO_015_AI"
+  ],
+  "output_format": "named-map"
+}
+```
+
+Single output binding:
+
+```json
+{
+  "binding_type": "single",
   "output_name": "setpoint",
   "data_source_id": 1,
   "target_tag": "sthb:DCS_AO_RTO_014_AO",
+  "dry_run": true
+}
+```
+
+Batch output binding:
+
+```json
+{
+  "binding_type": "batch",
+  "output_name": "setpoints",
+  "data_source_id": 1,
+  "target_tags": [
+    "sthb:DCS_AO_RTO_014_AO",
+    "sthb:DCS_AO_RTO_015_AO"
+  ],
   "dry_run": true
 }
 ```
@@ -76,6 +108,26 @@ Rules:
 - `input_name` and `output_name` are plugin-facing semantic fields.
 - `source_tag` must reference a readable point if a point policy exists.
 - `target_tag` must reference a writable point if a point policy exists.
+- `binding_type` defaults to `single` for compatibility with early MVP
+  instance records.
+- A batch input still maps to one plugin input name. With
+  `output_format="named-map"`, the plugin receives an object whose keys are the
+  selected tags. With `output_format="ordered-list"`, the plugin receives an
+  array whose values follow the configured `source_tags` order.
+- A batch output maps one plugin output name to multiple target tags. The plugin
+  output must be an object whose keys are the target tags, for example:
+
+```json
+{
+  "setpoints": {
+    "sthb:DCS_AO_RTO_014_AO": 42.1,
+    "sthb:DCS_AO_RTO_015_AO": 43.2
+  }
+}
+```
+
+- Batch writeback records one writeback result per target tag. Missing target
+  values are blocked per tag and do not block unrelated tags.
 - `dry_run=true` still validates whether the target is allowed for writeback,
   but does not write to the connector.
 - Actual writeback additionally requires instance-level `writeback_enabled=true`

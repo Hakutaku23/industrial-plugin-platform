@@ -124,23 +124,121 @@ def execute_plugin_instance(
     if instance is None:
         raise PluginExecutionError(f"plugin instance not found: {instance_id}")
 
-    inputs = _resolve_bound_inputs(instance, metadata_store)
-    result = execute_plugin_version(
-        package_name=instance["package_name"],
-        version=instance["version"],
-        inputs=inputs,
-        config=instance["config"],
+    resolved_inputs: dict[str, Any] = {}
+    try:
+        resolved_inputs = _resolve_bound_inputs(instance, metadata_store)
+    except Exception as exc:  # noqa: BLE001
+        return _record_failed_instance_run(
+            metadata_store=metadata_store,
+            instance=instance,
+            trigger_type=trigger_type,
+            inputs=resolved_inputs,
+            error_code="E_INPUT_BINDING_FAILED",
+            error_message=str(exc),
+        )
+
+    try:
+        result = execute_plugin_version(
+            package_name=instance["package_name"],
+            version=instance["version"],
+            inputs=resolved_inputs,
+            config=instance["config"],
+            trigger_type=trigger_type,
+            instance_id=instance_id,
+            store=metadata_store,
+        )
+    except PluginExecutionError as exc:
+        return _record_failed_instance_run(
+            metadata_store=metadata_store,
+            instance=instance,
+            trigger_type=trigger_type,
+            inputs=resolved_inputs,
+            error_code="E_EXECUTION_SETUP_FAILED",
+            error_message=str(exc),
+        )
+
+    try:
+        writeback = _apply_output_bindings(
+            run_id=result["run_id"],
+            outputs=result["outputs"],
+            instance=instance,
+            store=metadata_store,
+        )
+    except Exception as exc:  # noqa: BLE001
+        metadata_store.record_audit_event(
+            event_type="plugin.instance.writeback_failed",
+            target_type="plugin_instance",
+            target_id=str(instance_id),
+            details={
+                "message": str(exc),
+                "run_id": result["run_id"],
+                "exception_type": type(exc).__name__,
+            },
+        )
+        writeback = [
+            {
+                "output_name": "*",
+                "data_source_id": -1,
+                "target_tag": "*",
+                "value": None,
+                "status": "failed",
+                "reason": str(exc),
+                "dry_run": True,
+            }
+        ]
+
+    return {**result, "inputs": resolved_inputs, "writeback": writeback}
+
+
+def _record_failed_instance_run(
+    *,
+    metadata_store: MetadataStore,
+    instance: dict[str, Any],
+    trigger_type: str,
+    inputs: dict[str, Any],
+    error_code: str,
+    error_message: str,
+) -> dict[str, Any]:
+    started_at = datetime.now(UTC)
+    version_record = metadata_store.get_plugin_version(instance["package_name"], instance["version"])
+    if version_record is None:
+        raise PluginExecutionError(
+            f"plugin version not found for instance: {instance['package_name']}@{instance['version']}"
+        )
+
+    run_id = f"run-{uuid.uuid4().hex}"
+    recorded = metadata_store.record_plugin_run(
+        run_id=run_id,
+        package_id=int(version_record["package_id"]),
+        version_id=int(version_record["id"]),
+        instance_id=int(instance["id"]),
         trigger_type=trigger_type,
-        instance_id=instance_id,
-        store=metadata_store,
+        environment=settings.environment,
+        status="FAILED",
+        inputs=inputs,
+        outputs={},
+        metrics={},
+        logs=[
+            {
+                "source": "scheduler" if trigger_type == "schedule" else "runner",
+                "level": "ERROR",
+                "message": error_message,
+            }
+        ],
+        error={"code": error_code, "message": error_message},
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
     )
-    writeback = _apply_output_bindings(
-        run_id=result["run_id"],
-        outputs=result["outputs"],
-        instance=instance,
-        store=metadata_store,
-    )
-    return {**result, "inputs": inputs, "writeback": writeback}
+    return {
+        "id": recorded.id,
+        "run_id": recorded.run_id,
+        "status": recorded.status,
+        "inputs": inputs,
+        "outputs": {},
+        "metrics": {},
+        "error": {"code": error_code, "message": error_message},
+        "writeback": [],
+    }
 
 
 def _resolve_package_path(package_path: str) -> Path:
@@ -167,8 +265,28 @@ def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dic
         if data_source is None:
             raise PluginExecutionError(f"input data source not found: {binding['data_source_id']}")
         connector = build_connector(data_source, store)
+        binding_type = str(binding.get("binding_type", "single")).lower()
         try:
-            resolved[input_name] = connector.read_tag(binding["source_tag"])
+            if binding_type == "batch":
+                source_tags = _normalize_tags(binding.get("source_tags"))
+                if not source_tags:
+                    raise PluginExecutionError(f"batch input binding has no source tags: {input_name}")
+                values_by_tag = connector.read_tags(source_tags)
+                output_format = str(binding.get("output_format", "named-map")).lower()
+                if output_format == "ordered-list":
+                    resolved[input_name] = [values_by_tag[tag] for tag in source_tags]
+                elif output_format == "named-map":
+                    resolved[input_name] = {tag: values_by_tag[tag] for tag in source_tags}
+                else:
+                    raise PluginExecutionError(
+                        f"unsupported batch input output_format for {input_name}: {output_format}"
+                    )
+                continue
+
+            source_tag = str(binding.get("source_tag", "")).strip()
+            if not source_tag:
+                raise PluginExecutionError(f"single input binding has no source tag: {input_name}")
+            resolved[input_name] = connector.read_tag(source_tag)
         except ConnectorError as exc:
             raise PluginExecutionError(f"input binding failed for {input_name}: {exc}") from exc
     return resolved
@@ -185,8 +303,25 @@ def _apply_output_bindings(
     for binding in instance["output_bindings"]:
         output_name = binding["output_name"]
         data_source_id = int(binding["data_source_id"])
-        target_tag = binding["target_tag"]
         dry_run = bool(binding.get("dry_run", True))
+        binding_type = str(binding.get("binding_type", "single")).lower()
+
+        if binding_type == "batch":
+            results.extend(
+                _apply_batch_output_binding(
+                    run_id=run_id,
+                    outputs=outputs,
+                    instance=instance,
+                    store=store,
+                    output_name=output_name,
+                    data_source_id=data_source_id,
+                    target_tags=_normalize_tags(binding.get("target_tags")),
+                    dry_run=dry_run,
+                )
+            )
+            continue
+
+        target_tag = str(binding.get("target_tag", "")).strip()
         value = outputs.get(output_name)
 
         if output_name not in outputs:
@@ -199,6 +334,21 @@ def _apply_output_bindings(
                 value=None,
                 status="blocked",
                 reason="output_missing",
+                dry_run=dry_run,
+            )
+            results.append(result)
+            continue
+
+        if not target_tag:
+            result = _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag="*",
+                value=value,
+                status="blocked",
+                reason="target_tag_empty",
                 dry_run=dry_run,
             )
             results.append(result)
@@ -274,6 +424,181 @@ def _apply_output_bindings(
             )
         )
     return results
+
+
+def _apply_batch_output_binding(
+    *,
+    run_id: str,
+    outputs: dict[str, Any],
+    instance: dict[str, Any],
+    store: MetadataStore,
+    output_name: str,
+    data_source_id: int,
+    target_tags: list[str],
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    if not target_tags:
+        return [
+            _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag="*",
+                value=None,
+                status="blocked",
+                reason="target_tags_empty",
+                dry_run=dry_run,
+            )
+        ]
+
+    if output_name not in outputs:
+        return [
+            _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag=target_tag,
+                value=None,
+                status="blocked",
+                reason="output_missing",
+                dry_run=dry_run,
+            )
+            for target_tag in target_tags
+        ]
+
+    output_value = outputs[output_name]
+    if not isinstance(output_value, dict):
+        return [
+            _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag=target_tag,
+                value=None,
+                status="blocked",
+                reason="batch_output_must_be_object",
+                dry_run=dry_run,
+            )
+            for target_tag in target_tags
+        ]
+
+    data_source = store.get_data_source(data_source_id)
+    if data_source is None:
+        return [
+            _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag=target_tag,
+                value=output_value.get(target_tag),
+                status="blocked",
+                reason="data_source_not_found",
+                dry_run=dry_run,
+            )
+            for target_tag in target_tags
+        ]
+
+    results: list[dict[str, Any]] = []
+    writable_values: dict[str, Any] = {}
+    for target_tag in target_tags:
+        if target_tag not in output_value:
+            results.append(
+                _record_writeback_result(
+                    store=store,
+                    run_id=run_id,
+                    output_name=output_name,
+                    data_source_id=data_source_id,
+                    target_tag=target_tag,
+                    value=None,
+                    status="blocked",
+                    reason="target_value_missing",
+                    dry_run=dry_run,
+                )
+            )
+            continue
+
+        value = output_value[target_tag]
+        try:
+            ensure_tag_access(data_source, target_tag, "write")
+        except ConnectorError as exc:
+            results.append(
+                _record_writeback_result(
+                    store=store,
+                    run_id=run_id,
+                    output_name=output_name,
+                    data_source_id=data_source_id,
+                    target_tag=target_tag,
+                    value=value,
+                    status="blocked",
+                    reason=str(exc),
+                    dry_run=dry_run,
+                )
+            )
+            continue
+        writable_values[target_tag] = value
+
+    if not writable_values:
+        return results
+
+    if dry_run or not instance["writeback_enabled"]:
+        for target_tag, value in writable_values.items():
+            results.append(
+                _record_writeback_result(
+                    store=store,
+                    run_id=run_id,
+                    output_name=output_name,
+                    data_source_id=data_source_id,
+                    target_tag=target_tag,
+                    value=value,
+                    status="dry_run",
+                    reason="writeback disabled or dry_run binding",
+                    dry_run=True,
+                )
+            )
+        return results
+
+    try:
+        write_results = build_connector(data_source, store).write_tags(writable_values)
+    except Exception as exc:  # noqa: BLE001
+        write_results = {
+            target_tag: {"status": "failed", "value": value, "reason": str(exc)}
+            for target_tag, value in writable_values.items()
+        }
+
+    for target_tag, write_result in write_results.items():
+        results.append(
+            _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag=target_tag,
+                value=write_result.get("value"),
+                status=str(write_result.get("status", "failed")),
+                reason=str(write_result.get("reason", "")),
+                dry_run=False,
+            )
+        )
+    return results
+
+
+def _normalize_tags(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        tag = str(item).strip()
+        if not tag or tag in seen:
+            continue
+        tags.append(tag)
+        seen.add(tag)
+    return tags
 
 
 def _record_writeback_result(
