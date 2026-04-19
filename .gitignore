@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+dist/
+var/*.sqlite3
+var/*.sqlite3-*
+var/test-*/
+var/test-*
+var/packages/_intake/
+

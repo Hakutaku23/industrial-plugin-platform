@@ -1,0 +1,13 @@
+{
+  "name": "industrial-plugin-platform-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:web": "npm --prefix frontend run dev",
+    "dev:api": "powershell -ExecutionPolicy Bypass -File ./scripts/dev-api.ps1",
+    "build": "npm --prefix frontend run build",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "test:api": "powershell -ExecutionPolicy Bypass -File ./scripts/run-tests.ps1"
+  }
+}

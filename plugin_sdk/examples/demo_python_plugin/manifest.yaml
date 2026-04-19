@@ -1,0 +1,42 @@
+apiVersion: plugin.platform/v1
+kind: PluginPackage
+metadata:
+  name: demo-python-plugin
+  displayName: Demo Python Plugin
+  version: 0.1.0
+  author: Dev
+  description: Demo plugin for local runner smoke tests.
+  tags:
+    - demo
+    - python
+spec:
+  pluginType: python
+  packageFormat: zip
+  entry:
+    mode: function
+    file: runtime/main.py
+    callable: run
+  runtime:
+    pythonVersion: "3.12"
+    workingDir: "."
+    timeoutSec: 20
+    memoryMB: 256
+    cpuLimit: 1
+  schedule:
+    type: manual
+  inputs:
+    - name: value
+      type: number
+      required: true
+  outputs:
+    - name: doubled
+      type: number
+      writable: false
+  permissions:
+    network: false
+    filesystem: scoped
+    writeback: false
+compatibility:
+  platformApi: ">=0.1.0"
+  runnerApi: ">=0.1.0"
+

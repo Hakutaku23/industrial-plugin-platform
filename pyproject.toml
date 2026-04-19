@@ -1,0 +1,18 @@
+[project]
+name = "industrial-plugin-platform"
+version = "0.1.0"
+description = "Industrial algorithm plugin platform foundation."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "pydantic",
+  "sqlalchemy",
+  "pyyaml",
+  "uvicorn",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "apps/api",
+  "apps/runner",
+]

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/plugin.platform/v1/plugin_manifest.schema.json",
+  "title": "PluginPackage Manifest",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec", "compatibility"],
+  "properties": {
+    "apiVersion": {
+      "const": "plugin.platform/v1"
+    },
+    "kind": {
+      "const": "PluginPackage"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "displayName", "version", "author", "description"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "author": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "pluginType",
+        "packageFormat",
+        "entry",
+        "runtime",
+        "schedule",
+        "inputs",
+        "outputs",
+        "permissions"
+      ],
+      "properties": {
+        "pluginType": {
+          "enum": ["python", "binary", "archive"]
+        },
+        "packageFormat": {
+          "enum": ["directory", "zip", "tar.gz"]
+        },
+        "entry": {
+          "type": "object",
+          "required": ["mode"],
+          "properties": {
+            "mode": {
+              "enum": ["function", "cli", "service"]
+            },
+            "file": {
+              "type": "string"
+            },
+            "callable": {
+              "type": "string"
+            },
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object"
+        },
+        "schedule": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "enum": ["manual", "interval", "cron", "event", "service"]
+            }
+          }
+        },
+        "inputs": {
+          "type": "array"
+        },
+        "outputs": {
+          "type": "array"
+        },
+        "permissions": {
+          "type": "object"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["platformApi", "runnerApi"]
+    }
+  }
+}
+
