@@ -26,7 +26,27 @@ class PackageStorageTests(unittest.TestCase):
             )
 
             self.assertEqual(record.manifest.metadata.name, "demo-python-plugin")
+            self.assertTrue(record.package_dir.is_absolute())
             self.assertTrue((record.package_dir / "manifest.yaml").exists())
+        finally:
+            self._remove_workspace_test_dir(storage_dir)
+
+    def test_zip_with_single_top_level_directory_is_stored(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        plugin_dir = repo_root / "plugin_sdk" / "examples" / "no_input_output_plugin"
+        package_bytes = self._zip_wrapped_directory(plugin_dir)
+
+        storage_dir = self._workspace_test_dir(repo_root)
+        try:
+            record = PackageStorage(storage_dir).add_archive_bytes(
+                "no-input-output-plugin.zip",
+                package_bytes,
+            )
+
+            self.assertEqual(record.manifest.metadata.name, "no-input-output-plugin")
+            self.assertTrue(record.package_dir.is_absolute())
+            self.assertTrue((record.package_dir / "manifest.yaml").exists())
+            self.assertTrue((record.package_dir / "runtime" / "main.py").exists())
         finally:
             self._remove_workspace_test_dir(storage_dir)
 
@@ -49,6 +69,14 @@ class PackageStorageTests(unittest.TestCase):
             for path in source_dir.rglob("*"):
                 if path.is_file():
                     archive.write(path, path.relative_to(source_dir).as_posix())
+        return payload.getvalue()
+
+    def _zip_wrapped_directory(self, source_dir: Path) -> bytes:
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in source_dir.rglob("*"):
+                if path.is_file():
+                    archive.write(path, Path(source_dir.name, path.relative_to(source_dir)).as_posix())
         return payload.getvalue()
 
     def _workspace_test_dir(self, repo_root: Path) -> Path:

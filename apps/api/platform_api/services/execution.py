@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from platform_api.core.config import settings
-from platform_api.services.connectors import ConnectorError, build_connector
+from platform_api.services.connectors import ConnectorError, build_connector, ensure_tag_access
 from platform_api.services.manifest import PluginManifest
 from platform_api.services.metadata_store import MetadataStore
 from platform_runner.executor import LocalPythonRunner, RunnerExecutionError
@@ -21,6 +21,8 @@ def execute_plugin_version(
     version: str,
     inputs: dict[str, Any],
     config: dict[str, Any],
+    trigger_type: str = "manual",
+    instance_id: int | None = None,
     store: MetadataStore | None = None,
 ) -> dict[str, Any]:
     metadata_store = store or MetadataStore(settings.metadata_db_path)
@@ -37,12 +39,12 @@ def execute_plugin_version(
     payload = {
         "context": {
             "run_id": run_id,
-            "instance_id": None,
+            "instance_id": instance_id,
             "plugin": package_name,
             "version": version,
             "timestamp": started_at.isoformat(),
             "attempt": 1,
-            "trigger_type": "manual",
+            "trigger_type": trigger_type,
             "environment": settings.environment,
         },
         "inputs": inputs,
@@ -57,8 +59,9 @@ def execute_plugin_version(
     status = "FAILED"
 
     try:
+        package_dir = _resolve_package_path(str(version_record["package_path"]))
         runner_result = LocalPythonRunner().execute_function(
-            package_dir=Path(version_record["package_path"]),
+            package_dir=package_dir,
             entry_file=manifest.spec.entry.file or "",
             callable_name=manifest.spec.entry.callable or "",
             payload=payload,
@@ -87,7 +90,8 @@ def execute_plugin_version(
         run_id=run_id,
         package_id=int(version_record["package_id"]),
         version_id=int(version_record["id"]),
-        trigger_type="manual",
+        instance_id=instance_id,
+        trigger_type=trigger_type,
         environment=settings.environment,
         status=status,
         inputs=inputs,
@@ -112,6 +116,7 @@ def execute_plugin_version(
 def execute_plugin_instance(
     *,
     instance_id: int,
+    trigger_type: str = "manual",
     store: MetadataStore | None = None,
 ) -> dict[str, Any]:
     metadata_store = store or MetadataStore(settings.metadata_db_path)
@@ -125,6 +130,8 @@ def execute_plugin_instance(
         version=instance["version"],
         inputs=inputs,
         config=instance["config"],
+        trigger_type=trigger_type,
+        instance_id=instance_id,
         store=metadata_store,
     )
     writeback = _apply_output_bindings(
@@ -134,6 +141,13 @@ def execute_plugin_instance(
         store=metadata_store,
     )
     return {**result, "inputs": inputs, "writeback": writeback}
+
+
+def _resolve_package_path(package_path: str) -> Path:
+    path = Path(package_path)
+    if path.is_absolute():
+        return path
+    return (settings.project_root / path).resolve()
 
 
 def _map_plugin_status(status: str) -> str:
@@ -190,21 +204,6 @@ def _apply_output_bindings(
             results.append(result)
             continue
 
-        if dry_run or not instance["writeback_enabled"]:
-            result = _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=value,
-                status="dry_run",
-                reason="writeback disabled or dry_run binding",
-                dry_run=True,
-            )
-            results.append(result)
-            continue
-
         data_source = store.get_data_source(data_source_id)
         if data_source is None:
             result = _record_writeback_result(
@@ -216,7 +215,39 @@ def _apply_output_bindings(
                 value=value,
                 status="blocked",
                 reason="data_source_not_found",
-                dry_run=False,
+                dry_run=dry_run,
+            )
+            results.append(result)
+            continue
+
+        try:
+            ensure_tag_access(data_source, target_tag, "write")
+        except ConnectorError as exc:
+            result = _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag=target_tag,
+                value=value,
+                status="blocked",
+                reason=str(exc),
+                dry_run=dry_run,
+            )
+            results.append(result)
+            continue
+
+        if dry_run or not instance["writeback_enabled"]:
+            result = _record_writeback_result(
+                store=store,
+                run_id=run_id,
+                output_name=output_name,
+                data_source_id=data_source_id,
+                target_tag=target_tag,
+                value=value,
+                status="dry_run",
+                reason="writeback disabled or dry_run binding",
+                dry_run=True,
             )
             results.append(result)
             continue

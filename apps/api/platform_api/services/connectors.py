@@ -21,8 +21,7 @@ class MockConnector(Connector):
         self.store = store
 
     def read_tag(self, tag: str) -> Any:
-        if not self.data_source["read_enabled"]:
-            raise ConnectorError("data source is not readable")
+        ensure_tag_access(self.data_source, tag, "read")
 
         points = self.data_source["config"].get("points", {})
         if tag not in points:
@@ -30,8 +29,7 @@ class MockConnector(Connector):
         return points[tag]
 
     def write_tag(self, tag: str, value: Any) -> None:
-        if not self.data_source["write_enabled"]:
-            raise ConnectorError("data source is not writable")
+        ensure_tag_access(self.data_source, tag, "write")
 
         config = dict(self.data_source["config"])
         points = dict(config.get("points", {}))
@@ -62,16 +60,14 @@ class RedisConnector(Connector):
         )
 
     def read_tag(self, tag: str) -> Any:
-        if not self.data_source["read_enabled"]:
-            raise ConnectorError("data source is not readable")
+        ensure_tag_access(self.data_source, tag, "read")
         value = self.client.get(self._key(tag))
         if value is None:
             raise ConnectorError(f"redis key not found: {tag}")
         return _coerce_scalar(value)
 
     def write_tag(self, tag: str, value: Any) -> None:
-        if not self.data_source["write_enabled"]:
-            raise ConnectorError("data source is not writable")
+        ensure_tag_access(self.data_source, tag, "write")
         self.client.set(self._key(tag), value)
 
     def _key(self, tag: str) -> str:
@@ -87,6 +83,86 @@ def build_connector(data_source: dict[str, Any], store: MetadataStore) -> Connec
     raise ConnectorError(f"unsupported connector type: {connector_type}")
 
 
+def ensure_tag_access(data_source: dict[str, Any], tag: str, operation: str) -> None:
+    if operation == "read":
+        if not data_source["read_enabled"]:
+            raise ConnectorError("data source is not readable")
+        if not _has_point_policy(data_source, "read"):
+            return
+        if _tag_allowed_by_catalog(data_source, tag, "read") or tag in _tag_list(data_source, "read"):
+            return
+        raise ConnectorError(f"tag is not configured as readable: {tag}")
+
+    if operation == "write":
+        if not data_source["write_enabled"]:
+            raise ConnectorError("data source is not writable")
+        if not _has_point_policy(data_source, "write"):
+            return
+        if _tag_allowed_by_catalog(data_source, tag, "write") or tag in _tag_list(data_source, "write"):
+            return
+        raise ConnectorError(f"tag is not configured as writable: {tag}")
+
+    raise ConnectorError(f"unsupported tag operation: {operation}")
+
+
+def _has_point_policy(data_source: dict[str, Any], operation: str) -> bool:
+    config = data_source["config"]
+    catalog = config.get("pointCatalog") or config.get("point_catalog")
+    if isinstance(catalog, list) and catalog:
+        return True
+    return bool(_tag_list(data_source, operation))
+
+
+def _tag_allowed_by_catalog(data_source: dict[str, Any], tag: str, operation: str) -> bool:
+    config = data_source["config"]
+    catalog = config.get("pointCatalog") or config.get("point_catalog")
+    if not isinstance(catalog, list):
+        return False
+
+    if operation == "read":
+        tag_fields = ("readTag", "read_tag")
+        permission_fields = ("canRead", "can_read")
+    else:
+        tag_fields = ("writeTag", "write_tag")
+        permission_fields = ("canWrite", "can_write")
+
+    for point in catalog:
+        if not isinstance(point, dict):
+            continue
+        point_tag = _first_string(point, tag_fields)
+        if point_tag != tag:
+            continue
+        return _first_bool(point, permission_fields, True)
+    return False
+
+
+def _tag_list(data_source: dict[str, Any], operation: str) -> set[str]:
+    config = data_source["config"]
+    keys = ("readTags", "read_tags") if operation == "read" else ("writeTags", "write_tags")
+    tags: set[str] = set()
+    for key in keys:
+        value = config.get(key)
+        if isinstance(value, list):
+            tags.update(item for item in value if isinstance(item, str) and item)
+    return tags
+
+
+def _first_string(record: dict[str, Any], fields: tuple[str, ...]) -> str | None:
+    for field in fields:
+        value = record.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _first_bool(record: dict[str, Any], fields: tuple[str, ...], default: bool) -> bool:
+    for field in fields:
+        value = record.get(field)
+        if isinstance(value, bool):
+            return value
+    return default
+
+
 def _coerce_scalar(value: str) -> Any:
     try:
         if "." in value:
@@ -94,4 +170,3 @@ def _coerce_scalar(value: str) -> Any:
         return int(value)
     except ValueError:
         return value
-

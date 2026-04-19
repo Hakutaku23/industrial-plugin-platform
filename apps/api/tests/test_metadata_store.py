@@ -5,6 +5,7 @@ import sys
 import unittest
 import uuid
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -95,6 +96,83 @@ class MetadataStoreTests(unittest.TestCase):
             self.assertEqual(versions[0]["version"], "0.1.0")
             self.assertEqual(versions[0]["manifest"]["metadata"]["name"], "demo-python-plugin")
             self.assertIsNone(missing_versions)
+        finally:
+            self._remove_workspace_test_dir(workspace)
+
+    def test_data_source_can_be_deleted(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        workspace = self._workspace_test_dir(repo_root)
+        metadata_store = MetadataStore(workspace / "metadata.sqlite3")
+
+        try:
+            source = metadata_store.upsert_data_source(
+                name="test-source",
+                connector_type="mock",
+                config={"points": {"a": 1}, "readTags": ["a"], "writeTags": ["b"]},
+                read_enabled=True,
+                write_enabled=True,
+            )
+
+            self.assertEqual(len(metadata_store.list_data_sources()), 1)
+            self.assertTrue(metadata_store.delete_data_source(source.id))
+            self.assertFalse(metadata_store.delete_data_source(source.id))
+            self.assertEqual(metadata_store.list_data_sources(), [])
+        finally:
+            self._remove_workspace_test_dir(workspace)
+
+    def test_instance_schedule_can_be_claimed_and_finished(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        workspace = self._workspace_test_dir(repo_root)
+        package_storage = PackageStorage(workspace / "packages")
+        metadata_store = MetadataStore(workspace / "metadata.sqlite3")
+
+        try:
+            package_bytes = self._zip_directory(
+                repo_root / "plugin_sdk" / "examples" / "demo_python_plugin"
+            )
+            package_record = package_storage.add_archive_bytes(
+                "demo-python-plugin.zip",
+                package_bytes,
+            )
+            metadata_store.register_package_upload(package_record)
+            instance = metadata_store.upsert_plugin_instance(
+                name="scheduled-instance",
+                package_name="demo-python-plugin",
+                version="0.1.0",
+                input_bindings=[],
+                output_bindings=[],
+                config={},
+                writeback_enabled=False,
+                schedule_enabled=True,
+                schedule_interval_sec=30,
+            )
+            self.assertIsNotNone(instance)
+
+            saved = metadata_store.get_plugin_instance(instance.id)
+            self.assertIsNotNone(saved)
+            self.assertTrue(saved["schedule_enabled"])
+            self.assertEqual(saved["schedule_interval_sec"], 30)
+            self.assertEqual(saved["status"], "scheduled")
+
+            due_at = datetime.now(UTC) + timedelta(seconds=31)
+            claimed = metadata_store.claim_due_scheduled_instances(now=due_at)
+            self.assertEqual([item["id"] for item in claimed], [instance.id])
+            self.assertEqual(metadata_store.get_plugin_instance(instance.id)["status"], "running")
+
+            metadata_store.finish_scheduled_instance_run(
+                instance_id=instance.id,
+                finished_at=due_at,
+            )
+            finished = metadata_store.get_plugin_instance(instance.id)
+            self.assertEqual(finished["status"], "scheduled")
+            self.assertTrue(finished["last_scheduled_run_at"].startswith(due_at.replace(tzinfo=None).isoformat()))
+            self.assertIsNotNone(finished["next_scheduled_run_at"])
+
+            stopped = metadata_store.set_plugin_instance_schedule(instance_id=instance.id, enabled=False)
+            self.assertFalse(stopped["schedule_enabled"])
+            self.assertEqual(stopped["status"], "stopped")
+            self.assertTrue(metadata_store.delete_plugin_instance(instance.id))
+            self.assertIsNone(metadata_store.get_plugin_instance(instance.id))
         finally:
             self._remove_workspace_test_dir(workspace)
 

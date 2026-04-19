@@ -24,7 +24,7 @@ class PackageRecord:
 
 class PackageStorage:
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def add_archive_bytes(self, filename: str, content: bytes) -> PackageRecord:
@@ -46,16 +46,17 @@ class PackageStorage:
             else:
                 self._extract_tar_gz(archive_path, extracted_dir)
 
+            package_root = self._locate_package_root(extracted_dir)
             try:
-                manifest = load_manifest(extracted_dir / "manifest.yaml")
+                manifest = load_manifest(package_root / "manifest.yaml")
             except ManifestError as exc:
                 raise PackageStorageError(str(exc)) from exc
 
-            self._validate_entry_exists(extracted_dir, manifest)
+            self._validate_entry_exists(package_root, manifest)
             target_dir = self.root / manifest.metadata.name / manifest.metadata.version / digest[:12]
             if not target_dir.exists():
                 target_dir.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(extracted_dir, target_dir)
+                shutil.copytree(package_root, target_dir)
         finally:
             self._remove_child_dir(staging_dir)
 
@@ -96,6 +97,24 @@ class PackageStorage:
                 archive.extractall(output_dir)
         except tarfile.TarError as exc:
             raise PackageStorageError("tar.gz package is invalid") from exc
+
+    def _locate_package_root(self, extracted_dir: Path) -> Path:
+        if (extracted_dir / "manifest.yaml").exists():
+            return extracted_dir
+
+        entries = [
+            path
+            for path in extracted_dir.iterdir()
+            if path.name not in {"__MACOSX", ".DS_Store"}
+        ]
+        directories = [path for path in entries if path.is_dir()]
+        files = [path for path in entries if path.is_file()]
+        if len(directories) == 1 and not files and (directories[0] / "manifest.yaml").exists():
+            return directories[0]
+
+        raise PackageStorageError(
+            "manifest not found: expected manifest.yaml at archive root or inside a single top-level directory"
+        )
 
     def _validate_entry_exists(self, package_dir: Path, manifest: PluginManifest) -> None:
         entry = manifest.spec.entry

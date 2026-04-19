@@ -9,5 +9,6 @@ var/*.sqlite3
 var/*.sqlite3-*
 var/test-*/
 var/test-*
-var/packages/_intake/
-
+var/manual-package-check/
+var/packages/*
+*.zip

@@ -1,0 +1,45 @@
+apiVersion: plugin.platform/v1
+kind: PluginPackage
+metadata:
+  name: no-input-output-plugin
+  displayName: No Input Output Test Plugin
+  version: 0.1.0
+  author: Dev
+  description: Local smoke-test plugin that requires no inputs and returns fixed outputs.
+  tags:
+    - demo
+    - smoke-test
+    - python
+spec:
+  pluginType: python
+  packageFormat: zip
+  entry:
+    mode: function
+    file: runtime/main.py
+    callable: run
+  runtime:
+    pythonVersion: "3.12"
+    workingDir: "."
+    timeoutSec: 20
+    memoryMB: 256
+    cpuLimit: 1
+  schedule:
+    type: manual
+  inputs: []
+  outputs:
+    - name: test_value
+      type: number
+      writable: false
+    - name: status_text
+      type: string
+      writable: false
+    - name: generated_at
+      type: string
+      writable: false
+  permissions:
+    network: false
+    filesystem: scoped
+    writeback: false
+compatibility:
+  platformApi: ">=0.1.0"
+  runnerApi: ">=0.1.0"

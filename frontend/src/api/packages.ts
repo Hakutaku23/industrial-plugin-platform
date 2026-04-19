@@ -42,6 +42,7 @@ export interface PluginRunRecord {
   run_id: string
   package_id: number
   version_id: number
+  instance_id: number | null
   package_name: string
   version: string
   trigger_type: string
@@ -80,6 +81,10 @@ export interface PluginInstanceRecord {
   output_bindings: Record<string, unknown>[]
   config: Record<string, unknown>
   writeback_enabled: boolean
+  schedule_enabled: boolean
+  schedule_interval_sec: number
+  last_scheduled_run_at: string | null
+  next_scheduled_run_at: string | null
   status: string
   created_at: string
   updated_at: string
@@ -156,8 +161,15 @@ export async function runPackageVersion(
   return response.json()
 }
 
-export async function listRuns(packageName?: string): Promise<PluginRunRecord[]> {
-  const query = packageName ? `?package_name=${encodeURIComponent(packageName)}` : ''
+export async function listRuns(packageName?: string, instanceId?: number): Promise<PluginRunRecord[]> {
+  const params = new URLSearchParams()
+  if (packageName) {
+    params.set('package_name', packageName)
+  }
+  if (instanceId !== undefined) {
+    params.set('instance_id', String(instanceId))
+  }
+  const query = params.toString() ? `?${params.toString()}` : ''
   const response = await fetch(`/api/v1/runs${query}`)
   if (!response.ok) {
     throw new Error(await response.text() || '运行记录加载失败')
@@ -196,6 +208,15 @@ export async function saveDataSource(payload: {
   return response.json()
 }
 
+export async function deleteDataSource(dataSourceId: number): Promise<void> {
+  const response = await fetch(`/api/v1/data-sources/${dataSourceId}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new Error(await response.text() || '数据源删除失败')
+  }
+}
+
 export async function listInstances(): Promise<PluginInstanceRecord[]> {
   const response = await fetch('/api/v1/instances')
   if (!response.ok) {
@@ -207,6 +228,7 @@ export async function listInstances(): Promise<PluginInstanceRecord[]> {
 }
 
 export async function saveInstance(payload: {
+  id?: number | null
   name: string
   package_name: string
   version: string
@@ -214,9 +236,12 @@ export async function saveInstance(payload: {
   output_bindings: Record<string, unknown>[]
   config: Record<string, unknown>
   writeback_enabled: boolean
+  schedule_enabled: boolean
+  schedule_interval_sec: number
 }): Promise<{ id: number; name: string; status: string }> {
-  const response = await fetch('/api/v1/instances', {
-    method: 'POST',
+  const endpoint = payload.id ? `/api/v1/instances/${payload.id}` : '/api/v1/instances'
+  const response = await fetch(endpoint, {
+    method: payload.id ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
@@ -225,6 +250,31 @@ export async function saveInstance(payload: {
   }
 
   return response.json()
+}
+
+export async function updateInstanceSchedule(
+  instanceId: number,
+  payload: { enabled: boolean; interval_sec?: number },
+): Promise<PluginInstanceRecord> {
+  const response = await fetch(`/api/v1/instances/${instanceId}/schedule`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await response.text() || '实例定时状态更新失败')
+  }
+
+  return response.json()
+}
+
+export async function deleteInstance(instanceId: number): Promise<void> {
+  const response = await fetch(`/api/v1/instances/${instanceId}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new Error(await response.text() || '实例删除失败')
+  }
 }
 
 export async function runInstance(instanceId: number): Promise<RunPluginResult> {

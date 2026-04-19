@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,7 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    or_,
     select,
 )
 from sqlalchemy.engine import URL
@@ -79,6 +80,7 @@ class PluginRunModel(Base):
     run_id: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     package_id: Mapped[int] = mapped_column(ForeignKey("plugin_packages.id"), nullable=False, index=True)
     version_id: Mapped[int] = mapped_column(ForeignKey("plugin_versions.id"), nullable=False, index=True)
+    instance_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     trigger_type: Mapped[str] = mapped_column(String(60), nullable=False)
     environment: Mapped[str] = mapped_column(String(60), nullable=False)
     status: Mapped[str] = mapped_column(String(60), nullable=False)
@@ -128,6 +130,10 @@ class PluginInstanceModel(Base):
     output_bindings_json: Mapped[str] = mapped_column(Text, nullable=False)
     config_json: Mapped[str] = mapped_column(Text, nullable=False)
     writeback_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    schedule_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    schedule_interval_sec: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    last_scheduled_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_scheduled_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="configured")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -191,6 +197,7 @@ class MetadataStore:
 
     def initialize(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._ensure_local_schema()
 
     def _configure_local_sqlite(self) -> None:
         @event.listens_for(self.engine, "connect")
@@ -201,6 +208,33 @@ class MetadataStore:
             cursor.execute("PRAGMA journal_mode=OFF")
             cursor.execute("PRAGMA synchronous=OFF")
             cursor.close()
+
+    def _ensure_local_schema(self) -> None:
+        instance_columns = {
+            "schedule_enabled": "schedule_enabled INTEGER NOT NULL DEFAULT 0",
+            "schedule_interval_sec": "schedule_interval_sec INTEGER NOT NULL DEFAULT 30",
+            "last_scheduled_run_at": "last_scheduled_run_at DATETIME",
+            "next_scheduled_run_at": "next_scheduled_run_at DATETIME",
+        }
+        with self.engine.begin() as connection:
+            existing = {
+                row[1]
+                for row in connection.exec_driver_sql("PRAGMA table_info(plugin_instances)").all()
+            }
+            for name, ddl in instance_columns.items():
+                if name not in existing:
+                    connection.exec_driver_sql(f"ALTER TABLE plugin_instances ADD COLUMN {ddl}")
+
+            run_columns = {
+                "instance_id": "instance_id INTEGER",
+            }
+            existing_runs = {
+                row[1]
+                for row in connection.exec_driver_sql("PRAGMA table_info(plugin_runs)").all()
+            }
+            for name, ddl in run_columns.items():
+                if name not in existing_runs:
+                    connection.exec_driver_sql(f"ALTER TABLE plugin_runs ADD COLUMN {ddl}")
 
     def register_package_upload(
         self,
@@ -403,6 +437,7 @@ class MetadataStore:
         outputs: dict[str, Any],
         metrics: dict[str, Any],
         logs: list[dict[str, str]],
+        instance_id: int | None = None,
         error: dict[str, Any] | None = None,
         attempt: int = 1,
         started_at: datetime | None = None,
@@ -418,6 +453,7 @@ class MetadataStore:
                 run_id=run_id,
                 package_id=package_id,
                 version_id=version_id,
+                instance_id=instance_id,
                 trigger_type=trigger_type,
                 environment=environment,
                 status=status,
@@ -466,7 +502,11 @@ class MetadataStore:
 
             return RecordedRun(id=run.id, run_id=run.run_id, status=run.status)
 
-    def list_plugin_runs(self, package_name: str | None = None) -> list[dict[str, Any]]:
+    def list_plugin_runs(
+        self,
+        package_name: str | None = None,
+        instance_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         self.initialize()
         with self.session_factory() as session:
             statement = (
@@ -477,6 +517,8 @@ class MetadataStore:
             )
             if package_name:
                 statement = statement.where(PluginPackageModel.name == package_name)
+            if instance_id is not None:
+                statement = statement.where(PluginRunModel.instance_id == instance_id)
 
             rows = session.execute(statement).all()
             return [
@@ -485,6 +527,7 @@ class MetadataStore:
                     "run_id": run.run_id,
                     "package_id": run.package_id,
                     "version_id": run.version_id,
+                    "instance_id": run.instance_id,
                     "package_name": package.name,
                     "version": version.version,
                     "trigger_type": run.trigger_type,
@@ -582,6 +625,28 @@ class MetadataStore:
             rows = session.scalars(select(DataSourceModel).order_by(DataSourceModel.id)).all()
             return [self._data_source_to_dict(row) for row in rows]
 
+    def delete_data_source(self, data_source_id: int) -> bool:
+        self.initialize()
+        with self.session_factory() as session:
+            row = session.get(DataSourceModel, data_source_id)
+            if row is None:
+                return False
+
+            now = datetime.now(UTC)
+            session.delete(row)
+            session.add(
+                AuditEventModel(
+                    event_type="data_source.deleted",
+                    actor="local-dev",
+                    target_type="data_source",
+                    target_id=str(data_source_id),
+                    details_json=json.dumps({"id": data_source_id}, ensure_ascii=False, sort_keys=True),
+                    created_at=now,
+                )
+            )
+            session.commit()
+            return True
+
     def get_data_source(self, data_source_id: int) -> dict[str, Any] | None:
         self.initialize()
         with self.session_factory() as session:
@@ -608,6 +673,8 @@ class MetadataStore:
         output_bindings: list[dict[str, Any]],
         config: dict[str, Any],
         writeback_enabled: bool,
+        schedule_enabled: bool = False,
+        schedule_interval_sec: int = 30,
     ) -> RegisteredPluginInstance | None:
         self.initialize()
         now = datetime.now(UTC)
@@ -634,7 +701,14 @@ class MetadataStore:
                     output_bindings_json=json.dumps(output_bindings, ensure_ascii=False, sort_keys=True),
                     config_json=json.dumps(config, ensure_ascii=False, sort_keys=True),
                     writeback_enabled=1 if writeback_enabled else 0,
-                    status="configured",
+                    schedule_enabled=1 if schedule_enabled else 0,
+                    schedule_interval_sec=self._normalize_schedule_interval(schedule_interval_sec),
+                    next_scheduled_run_at=self._next_schedule_time(
+                        now,
+                        schedule_enabled,
+                        schedule_interval_sec,
+                    ),
+                    status="scheduled" if schedule_enabled else "configured",
                     created_at=now,
                     updated_at=now,
                 )
@@ -647,12 +721,86 @@ class MetadataStore:
                 instance.output_bindings_json = json.dumps(output_bindings, ensure_ascii=False, sort_keys=True)
                 instance.config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
                 instance.writeback_enabled = 1 if writeback_enabled else 0
-                instance.status = "configured"
+                instance.schedule_enabled = 1 if schedule_enabled else 0
+                instance.schedule_interval_sec = self._normalize_schedule_interval(schedule_interval_sec)
+                instance.next_scheduled_run_at = self._next_schedule_time(
+                    now,
+                    schedule_enabled,
+                    instance.schedule_interval_sec,
+                )
+                instance.status = "scheduled" if schedule_enabled else "configured"
                 instance.updated_at = now
 
             session.add(
                 AuditEventModel(
                     event_type="plugin.instance.configured",
+                    actor="local-dev",
+                    target_type="plugin_instance",
+                    target_id=str(instance.id),
+                    details_json=json.dumps(
+                        {"name": name, "package": package_name, "version": version},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_at=now,
+                )
+            )
+            session.commit()
+            return RegisteredPluginInstance(id=instance.id, name=instance.name, status=instance.status)
+
+    def update_plugin_instance(
+        self,
+        *,
+        instance_id: int,
+        name: str,
+        package_name: str,
+        version: str,
+        input_bindings: list[dict[str, Any]],
+        output_bindings: list[dict[str, Any]],
+        config: dict[str, Any],
+        writeback_enabled: bool,
+        schedule_enabled: bool = False,
+        schedule_interval_sec: int = 30,
+    ) -> RegisteredPluginInstance | None:
+        self.initialize()
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            instance = session.get(PluginInstanceModel, instance_id)
+            if instance is None:
+                return None
+
+            version_row = session.execute(
+                select(PluginPackageModel, PluginVersionModel)
+                .join(PluginVersionModel, PluginVersionModel.package_id == PluginPackageModel.id)
+                .where(
+                    PluginPackageModel.name == package_name,
+                    PluginVersionModel.version == version,
+                )
+            ).first()
+            if version_row is None:
+                return None
+
+            package, plugin_version = version_row
+            instance.name = name
+            instance.package_id = package.id
+            instance.version_id = plugin_version.id
+            instance.input_bindings_json = json.dumps(input_bindings, ensure_ascii=False, sort_keys=True)
+            instance.output_bindings_json = json.dumps(output_bindings, ensure_ascii=False, sort_keys=True)
+            instance.config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
+            instance.writeback_enabled = 1 if writeback_enabled else 0
+            instance.schedule_enabled = 1 if schedule_enabled else 0
+            instance.schedule_interval_sec = self._normalize_schedule_interval(schedule_interval_sec)
+            instance.next_scheduled_run_at = self._next_schedule_time(
+                now,
+                schedule_enabled,
+                instance.schedule_interval_sec,
+            )
+            instance.status = "scheduled" if schedule_enabled else "configured"
+            instance.updated_at = now
+
+            session.add(
+                AuditEventModel(
+                    event_type="plugin.instance.updated",
                     actor="local-dev",
                     target_type="plugin_instance",
                     target_id=str(instance.id),
@@ -694,6 +842,147 @@ class MetadataStore:
                 return None
             instance, package, version = row
             return self._plugin_instance_to_dict(instance, package, version)
+
+    def delete_plugin_instance(self, instance_id: int) -> bool:
+        self.initialize()
+        with self.session_factory() as session:
+            row = session.get(PluginInstanceModel, instance_id)
+            if row is None:
+                return False
+
+            now = datetime.now(UTC)
+            session.delete(row)
+            session.add(
+                AuditEventModel(
+                    event_type="plugin.instance.deleted",
+                    actor="local-dev",
+                    target_type="plugin_instance",
+                    target_id=str(instance_id),
+                    details_json=json.dumps({"id": instance_id}, ensure_ascii=False, sort_keys=True),
+                    created_at=now,
+                )
+            )
+            session.commit()
+            return True
+
+    def set_plugin_instance_schedule(
+        self,
+        *,
+        instance_id: int,
+        enabled: bool,
+        interval_sec: int | None = None,
+    ) -> dict[str, Any] | None:
+        self.initialize()
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            row = session.get(PluginInstanceModel, instance_id)
+            if row is None:
+                return None
+
+            if interval_sec is not None:
+                row.schedule_interval_sec = self._normalize_schedule_interval(interval_sec)
+            row.schedule_enabled = 1 if enabled else 0
+            row.next_scheduled_run_at = self._next_schedule_time(now, enabled, row.schedule_interval_sec)
+            row.status = "scheduled" if enabled else "stopped"
+            row.updated_at = now
+            session.add(
+                AuditEventModel(
+                    event_type="plugin.instance.schedule_updated",
+                    actor="local-dev",
+                    target_type="plugin_instance",
+                    target_id=str(instance_id),
+                    details_json=json.dumps(
+                        {
+                            "enabled": enabled,
+                            "interval_sec": row.schedule_interval_sec,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_at=now,
+                )
+            )
+            session.commit()
+            refreshed = session.execute(
+                select(PluginInstanceModel, PluginPackageModel, PluginVersionModel)
+                .join(PluginPackageModel, PluginPackageModel.id == PluginInstanceModel.package_id)
+                .join(PluginVersionModel, PluginVersionModel.id == PluginInstanceModel.version_id)
+                .where(PluginInstanceModel.id == instance_id)
+            ).one()
+            instance, package, version = refreshed
+            return self._plugin_instance_to_dict(instance, package, version)
+
+    def claim_due_scheduled_instances(self, *, now: datetime, limit: int = 10) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(PluginInstanceModel)
+                .where(
+                    PluginInstanceModel.schedule_enabled == 1,
+                    PluginInstanceModel.status != "running",
+                    or_(
+                        PluginInstanceModel.next_scheduled_run_at.is_(None),
+                        PluginInstanceModel.next_scheduled_run_at <= now,
+                    ),
+                )
+                .order_by(PluginInstanceModel.next_scheduled_run_at, PluginInstanceModel.id)
+                .limit(limit)
+            ).all()
+            claimed: list[dict[str, Any]] = []
+            for row in rows:
+                row.status = "running"
+                row.updated_at = now
+                claimed.append(
+                    {
+                        "id": row.id,
+                        "name": row.name,
+                        "schedule_interval_sec": row.schedule_interval_sec,
+                    }
+                )
+            session.commit()
+            return claimed
+
+    def finish_scheduled_instance_run(self, *, instance_id: int, finished_at: datetime) -> None:
+        self.initialize()
+        with self.session_factory() as session:
+            row = session.get(PluginInstanceModel, instance_id)
+            if row is None:
+                return
+
+            row.last_scheduled_run_at = finished_at
+            if row.schedule_enabled:
+                row.next_scheduled_run_at = finished_at + timedelta(
+                    seconds=self._normalize_schedule_interval(row.schedule_interval_sec)
+                )
+                row.status = "scheduled"
+            else:
+                row.next_scheduled_run_at = None
+                row.status = "stopped"
+            row.updated_at = finished_at
+            session.commit()
+
+    def record_audit_event(
+        self,
+        *,
+        event_type: str,
+        target_type: str,
+        target_id: str,
+        details: dict[str, Any],
+        actor: str = "local-dev",
+    ) -> None:
+        self.initialize()
+        with self.session_factory() as session:
+            session.add(
+                AuditEventModel(
+                    event_type=event_type,
+                    actor=actor,
+                    target_type=target_type,
+                    target_id=target_id,
+                    details_json=json.dumps(details, ensure_ascii=False, sort_keys=True),
+                    created_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
 
     def record_writeback(
         self,
@@ -802,7 +1091,28 @@ class MetadataStore:
             "output_bindings": json.loads(instance.output_bindings_json),
             "config": json.loads(instance.config_json),
             "writeback_enabled": bool(instance.writeback_enabled),
+            "schedule_enabled": bool(instance.schedule_enabled),
+            "schedule_interval_sec": instance.schedule_interval_sec,
+            "last_scheduled_run_at": instance.last_scheduled_run_at.isoformat()
+            if instance.last_scheduled_run_at
+            else None,
+            "next_scheduled_run_at": instance.next_scheduled_run_at.isoformat()
+            if instance.next_scheduled_run_at
+            else None,
             "status": instance.status,
             "created_at": instance.created_at.isoformat(),
             "updated_at": instance.updated_at.isoformat(),
         }
+
+    def _normalize_schedule_interval(self, interval_sec: int) -> int:
+        return max(5, int(interval_sec or 30))
+
+    def _next_schedule_time(
+        self,
+        now: datetime,
+        schedule_enabled: bool,
+        interval_sec: int,
+    ) -> datetime | None:
+        if not schedule_enabled:
+            return None
+        return now + timedelta(seconds=self._normalize_schedule_interval(interval_sec))
