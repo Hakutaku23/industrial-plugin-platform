@@ -1,4 +1,5 @@
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,7 +18,7 @@ from sqlalchemy import (
     or_,
     select,
 )
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 from platform_api.services.package_storage import PackageRecord
@@ -187,24 +188,51 @@ class RecordedRun:
 
 
 class MetadataStore:
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        database_url = URL.create("sqlite", database=str(self.db_path.resolve()))
-        self.engine = create_engine(database_url, future=True)
-        self._configure_local_sqlite()
+    def __init__(self, database: str | Path) -> None:
+        self.database = database
+        self.sqlite_path = self._sqlite_path(database)
+        if self.sqlite_path is not None:
+            self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        self.engine = create_engine(self._engine_target(database), future=True)
+        if self._is_sqlite(database):
+            self._configure_local_sqlite()
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False, future=True)
 
     def initialize(self) -> None:
         Base.metadata.create_all(self.engine)
-        self._ensure_local_schema()
+        if self._is_sqlite(self.database):
+            self._ensure_local_schema()
+
+    def _engine_target(self, database: str | Path) -> str | URL:
+        if isinstance(database, Path):
+            return URL.create("sqlite", database=str(database.resolve()))
+        if "://" in database:
+            return database
+        return URL.create("sqlite", database=str(Path(database).resolve()))
+
+    def _is_sqlite(self, database: str | Path) -> bool:
+        if isinstance(database, Path):
+            return True
+        if "://" not in database:
+            return True
+        return make_url(database).get_backend_name() == "sqlite"
+
+    def _sqlite_path(self, database: str | Path) -> Path | None:
+        if isinstance(database, Path):
+            return database.resolve()
+        if "://" not in database:
+            return Path(database).resolve()
+        url = make_url(database)
+        if url.get_backend_name() != "sqlite":
+            return None
+        if not url.database:
+            return None
+        return Path(url.database).resolve()
 
     def _configure_local_sqlite(self) -> None:
         @event.listens_for(self.engine, "connect")
         def set_local_sqlite_pragmas(dbapi_connection: object, connection_record: object) -> None:
             cursor = dbapi_connection.cursor()
-            # The current Windows workspace rejects SQLite journal file writes.
-            # This keeps the local MVP usable; production should use PostgreSQL.
             cursor.execute("PRAGMA journal_mode=OFF")
             cursor.execute("PRAGMA synchronous=OFF")
             cursor.close()
@@ -395,6 +423,85 @@ class MetadataStore:
                 }
                 for version in versions
             ]
+
+    def delete_plugin_package(self, package_name: str) -> bool:
+        self.initialize()
+        storage_roots: set[Path] = set()
+        with self.session_factory() as session:
+            package = session.scalar(
+                select(PluginPackageModel).where(PluginPackageModel.name == package_name)
+            )
+            if package is None:
+                return False
+
+            versions = session.scalars(
+                select(PluginVersionModel).where(PluginVersionModel.package_id == package.id)
+            ).all()
+            version_ids = [version.id for version in versions]
+            for version in versions:
+                try:
+                    path = Path(version.package_path).resolve()
+                    if len(path.parents) >= 2:
+                        storage_roots.add(path.parents[1])
+                    else:
+                        storage_roots.add(path)
+                except OSError:
+                    pass
+
+            instances = session.scalars(
+                select(PluginInstanceModel).where(PluginInstanceModel.package_id == package.id)
+            ).all()
+            instance_ids = [instance.id for instance in instances]
+
+            runs = session.scalars(
+                select(PluginRunModel).where(PluginRunModel.package_id == package.id)
+            ).all()
+            run_ids = [run.run_id for run in runs]
+
+            audit_rows = session.scalars(select(AuditEventModel)).all()
+            audit_targets = {
+                ('plugin_package', str(package.id)),
+                ('plugin_package', package.name),
+            }
+            audit_targets.update(('plugin_version', str(version_id)) for version_id in version_ids)
+            audit_targets.update(('plugin_instance', str(instance_id)) for instance_id in instance_ids)
+            audit_targets.update(('plugin_run', run_id) for run_id in run_ids)
+
+            for audit in audit_rows:
+                if (audit.target_type, audit.target_id) in audit_targets:
+                    session.delete(audit)
+
+            if run_ids:
+                for row in session.scalars(select(RunLogModel).where(RunLogModel.run_id.in_(run_ids))).all():
+                    session.delete(row)
+                for row in session.scalars(select(WritebackRecordModel).where(WritebackRecordModel.run_id.in_(run_ids))).all():
+                    session.delete(row)
+
+            for run in runs:
+                session.delete(run)
+            for instance in instances:
+                session.delete(instance)
+            for version in versions:
+                session.delete(version)
+
+            session.delete(package)
+            session.add(
+                AuditEventModel(
+                    event_type='plugin.package.deleted',
+                    actor='local-dev',
+                    target_type='plugin_package',
+                    target_id=package_name,
+                    details_json=json.dumps({'package': package_name}, ensure_ascii=False, sort_keys=True),
+                    created_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+
+        for storage_root in storage_roots:
+            if storage_root.exists():
+                shutil.rmtree(storage_root, ignore_errors=True)
+
+        return True
 
     def get_plugin_version(self, package_name: str, version: str) -> dict[str, Any] | None:
         self.initialize()

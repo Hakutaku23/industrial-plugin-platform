@@ -57,6 +57,7 @@ crates/                # Rust crates for performance-sensitive components
 plugin_sdk/            # SDKs and examples for plugin authors
 docs/                  # Architecture and specification docs
 scripts/               # Dev and automation scripts
+config/                # Deploy-time platform YAML config files
 ```
 
 Do not introduce ad-hoc directories when an existing module boundary is more appropriate.
@@ -75,6 +76,12 @@ Preferred:
 - Pinia
 - Vue Router
 - ECharts
+
+Frontend source discipline:
+
+- Keep source files in `.vue` and `.ts`
+- Do not commit transpiled `.js` files into `frontend/src/`
+- Build outputs belong in `dist/`, not beside source modules
 
 ### Backend
 
@@ -141,7 +148,40 @@ Do not add hardcoded tag names, plant IDs, device IDs, or proprietary mappings t
 
 ---
 
-## 7. Repository Operating Expectations
+## 7. Configuration Rules
+
+Treat platform configuration in three layers:
+
+1. **Deploy-time YAML file config**
+   - stored under `config/`
+   - used for platform storage, metadata backend, scheduler, runner defaults, logging, connector defaults
+
+2. **Environment variable overrides**
+   - used for machine- or deployment-specific overrides
+   - should override file config, not replace structured config entirely
+
+3. **Runtime metadata in database**
+   - data sources
+   - plugin instances
+   - bindings
+   - runs
+   - audits
+   - writeback records
+
+Do not move runtime metadata back into flat JSON/YAML files.
+
+Preferred format for deploy-time config:
+
+- YAML (`config/platform.yaml`)
+- optional environment-specific overlays such as `config/platform.dev.yaml`
+- environment variables only for host-specific overrides or secrets
+
+If a new setting affects the whole platform process, prefer YAML file config plus env override.
+If a new setting belongs to one plugin instance or one data source, keep it in metadata storage.
+
+---
+
+## 8. Repository Operating Expectations
 
 Agents should preserve local development usability.
 
@@ -165,7 +205,7 @@ Do not assume these commands already exist; add them or document the gap.
 
 ---
 
-## 8. Testing Expectations
+## 9. Testing Expectations
 
 For meaningful changes, agents should add or update tests where practical.
 
@@ -183,33 +223,34 @@ High-risk changes must not be merged without focused tests where feasible, espec
 - writeback policy enforcement
 - runner input/output protocol
 - approval and rollback behavior
+- configuration loading and override precedence
 
 If a change cannot be tested immediately, keep the change surface small and document the missing coverage.
 
 ---
 
-## 9. Documentation Expectations
+## 10. Documentation Expectations
 
-When changing core architecture, plugin contracts, runner behavior, package format, or repository structure, update relevant docs in `docs/`.
+When changing core architecture, plugin contracts, runner behavior, package format, repository structure, or configuration loading, update relevant docs in `docs/`.
 
 At minimum, keep these aligned:
 
 - `docs/ARCHITECTURE.md`
 - `docs/PLUGIN_SPEC.md`
+- `docs/RUNNER_PROTOCOL.md`
 - `AGENTS.md`
 
 If implementation and docs diverge, implementation should not silently drift without updating the corresponding design docs.
 
 For significant protocol changes, create or update adjacent docs such as:
 
-- `docs/RUNNER_PROTOCOL.md`
 - `docs/DATAFLOW_SPEC.md`
 - `docs/SECURITY_MODEL.md`
 - `docs/METADATA_MODEL.md`
 
 ---
 
-## 10. Plugin Package Assumptions
+## 11. Plugin Package Assumptions
 
 Until the spec changes, agents should assume:
 
@@ -223,7 +264,7 @@ Do not introduce one-off plugin loading logic for a single example package unles
 
 ---
 
-## 11. Security Expectations
+## 12. Security Expectations
 
 Agents must avoid introducing insecure defaults.
 
@@ -239,11 +280,11 @@ Default assumptions:
 
 If a feature would weaken isolation or auditability, prefer a safer baseline first.
 
-If a change affects writeback, approval, secrets, or package extraction, explicitly call that out in the change summary.
+If a change affects writeback, approval, secrets, package extraction, or process-wide configuration, explicitly call that out in the change summary.
 
 ---
 
-## 12. Migration Expectations
+## 13. Migration Expectations
 
 This project may evolve from an earlier fixed-function industrial control system.
 
@@ -259,7 +300,7 @@ Do not preserve old coupling just because it is already implemented.
 
 ---
 
-## 13. Definition of Done
+## 14. Definition of Done
 
 A task is not complete when code merely compiles.
 
@@ -278,9 +319,16 @@ For protocol-level changes, also ensure:
 - backward compatibility assessed
 - migration notes added if needed
 
+For configuration changes, also ensure:
+
+- file config example updated
+- env override path documented
+- default values remain explicit
+- runtime metadata boundaries remain unchanged
+
 ---
 
-## 14. Commit / Change Discipline
+## 15. Commit / Change Discipline
 
 When preparing changes, agents should:
 
@@ -298,10 +346,11 @@ Where possible, changes should be shaped so they can be reviewed by feature area
 - worker
 - frontend
 - Rust core
+- config
 
 ---
 
-## 15. Good First Milestones
+## 16. Good First Milestones
 
 Agents should generally prefer this implementation order unless instructed otherwise:
 
@@ -312,14 +361,15 @@ Agents should generally prefer this implementation order unless instructed other
 5. Python runner MVP
 6. mock connector and writeback flow
 7. frontend package/config pages
-8. binary runner support
-9. Rust optimization modules
+8. deploy-time config extraction
+9. binary runner support
+10. Rust optimization modules
 
 Do not jump to advanced protocol support before the platform foundation is stable.
 
 ---
 
-## 16. Anti-Patterns to Avoid
+## 17. Anti-Patterns to Avoid
 
 Avoid these common mistakes:
 
@@ -330,10 +380,12 @@ Avoid these common mistakes:
 - hiding protocol decisions inside implementation without documenting them
 - moving code to Rust just because it is “core”
 - building UI pages tightly coupled to one example plugin
+- committing generated frontend `.js` files beside TypeScript source
+- storing runtime metadata in deploy-time config files
 
 ---
 
-## 17. Current Priority
+## 18. Current Priority
 
 The immediate goal is to build the platform foundation first.
 
@@ -343,13 +395,14 @@ Current priorities are:
 - plugin package spec
 - runner contract definition
 - metadata model definition
+- deploy-time config extraction
 - local MVP that can upload and execute a simple plugin package
 
 Do not optimize for advanced plant-specific features before the platform core is stable.
 
 ---
 
-## 18. When Unsure
+## 19. When Unsure
 
 If requirements are ambiguous, prefer decisions that:
 

@@ -1,0 +1,65 @@
+# Industrial Plugin Platform deploy-time configuration
+#
+# This file is intended for platform-wide settings that affect the local API
+# process, scheduler behavior, storage layout, runner defaults, and connector
+# defaults.
+#
+# Do NOT store runtime metadata here. Data sources, plugin instances, bindings,
+# run records, and audit events should remain in the metadata database.
+
+app:
+  # Logical application name used for identification and local debugging.
+  name: industrial-plugin-platform
+
+  # Current deployment environment. Typical values: dev / test / prod.
+  environment: dev
+
+storage:
+  # Root directory where uploaded plugin packages are unpacked and persisted.
+  package_storage_dir: var/packages
+
+  # Root directory where run payloads, temp files, and runner artifacts live.
+  run_storage_dir: var/runs
+
+metadata:
+  # Metadata backend selector.
+  # First MVP supports sqlite and URL-based backends through SQLAlchemy.
+  backend: sqlite
+
+  # Local SQLite database path used when backend=sqlite and db_url is empty.
+  sqlite_path: var/platform.sqlite3
+
+  # Optional SQLAlchemy database URL.
+  # Example: postgresql+psycopg://user:pass@127.0.0.1:5432/platform
+  # When provided, it takes precedence over sqlite_path.
+  db_url: null
+
+scheduler:
+  # Whether the in-process scheduler starts with the API service.
+  enabled: true
+
+  # Poll interval for due scheduled instances.
+  poll_interval_sec: 1.0
+
+runner:
+  # Default timeout for runner executions when the plugin does not specify one.
+  default_timeout_sec: 30
+
+  # Upper safety bound that platform code may enforce later.
+  max_timeout_sec: 300
+
+  # Working root for runner-generated files.
+  work_root: var/runs
+
+logging:
+  # Basic process log level.
+  level: INFO
+
+connectors:
+  redis:
+    # Default connection parameters used when a Redis data source omits them.
+    default_host: 127.0.0.1
+    default_port: 6379
+    default_db: 0
+    default_connect_timeout_sec: 2.0
+    default_socket_timeout_sec: 2.0

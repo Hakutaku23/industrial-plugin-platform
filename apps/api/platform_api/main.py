@@ -1,19 +1,22 @@
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from platform_api.api.routes import router
+from platform_api.core.config import settings
 from platform_api.services.scheduler import scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    scheduler.start()
+    if settings.scheduler.enabled:
+        scheduler.start()
     try:
         yield
     finally:
-        scheduler.stop()
+        if settings.scheduler.enabled:
+            scheduler.stop()
 
 
 def create_app() -> FastAPI:

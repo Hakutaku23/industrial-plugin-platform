@@ -25,7 +25,7 @@ def execute_plugin_version(
     instance_id: int | None = None,
     store: MetadataStore | None = None,
 ) -> dict[str, Any]:
-    metadata_store = store or MetadataStore(settings.metadata_db_path)
+    metadata_store = store or MetadataStore(settings.metadata_database)
     version_record = metadata_store.get_plugin_version(package_name, version)
     if version_record is None:
         raise PluginExecutionError(f"plugin version not found: {package_name}@{version}")
@@ -119,7 +119,7 @@ def execute_plugin_instance(
     trigger_type: str = "manual",
     store: MetadataStore | None = None,
 ) -> dict[str, Any]:
-    metadata_store = store or MetadataStore(settings.metadata_db_path)
+    metadata_store = store or MetadataStore(settings.metadata_database)
     instance = metadata_store.get_plugin_instance(instance_id)
     if instance is None:
         raise PluginExecutionError(f"plugin instance not found: {instance_id}")

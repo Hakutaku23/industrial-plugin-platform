@@ -15,6 +15,14 @@ from platform_api.services.package_storage import PackageStorage, PackageStorage
 router = APIRouter(prefix="/api/v1")
 
 
+def _metadata_target() -> str | object:
+    return getattr(settings, 'metadata_database', getattr(settings, 'metadata_db_path'))
+
+
+def _store() -> MetadataStore:
+    return MetadataStore(_metadata_target())
+
+
 class RunRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -65,7 +73,7 @@ async def upload_package(
     except PackageStorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    registration = MetadataStore(settings.metadata_db_path).register_package_upload(record)
+    registration = _store().register_package_upload(record)
 
     return {
         "package_id": registration.package_id,
@@ -82,20 +90,27 @@ async def upload_package(
 
 @router.get("/packages")
 def list_packages() -> dict[str, object]:
-    return {"items": MetadataStore(settings.metadata_db_path).list_plugin_packages()}
+    return {"items": _store().list_plugin_packages()}
 
 
 @router.get("/packages/{package_name}/versions")
 def list_package_versions(package_name: str) -> dict[str, object]:
-    versions = MetadataStore(settings.metadata_db_path).list_plugin_versions(package_name)
+    versions = _store().list_plugin_versions(package_name)
     if versions is None:
         raise HTTPException(status_code=404, detail=f"plugin package not found: {package_name}")
     return {"items": versions}
 
 
+@router.delete("/packages/{package_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_package(package_name: str) -> None:
+    deleted = _store().delete_plugin_package(package_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"plugin package not found: {package_name}")
+
+
 @router.post("/data-sources", status_code=status.HTTP_201_CREATED)
 def upsert_data_source(request: DataSourceRequest) -> dict[str, object]:
-    result = MetadataStore(settings.metadata_db_path).upsert_data_source(
+    result = _store().upsert_data_source(
         name=request.name,
         connector_type=request.connector_type,
         config=request.config,
@@ -112,19 +127,19 @@ def upsert_data_source(request: DataSourceRequest) -> dict[str, object]:
 
 @router.get("/data-sources")
 def list_data_sources() -> dict[str, object]:
-    return {"items": MetadataStore(settings.metadata_db_path).list_data_sources()}
+    return {"items": _store().list_data_sources()}
 
 
 @router.delete("/data-sources/{data_source_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_data_source(data_source_id: int) -> None:
-    deleted = MetadataStore(settings.metadata_db_path).delete_data_source(data_source_id)
+    deleted = _store().delete_data_source(data_source_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"data source not found: {data_source_id}")
 
 
 @router.post("/instances", status_code=status.HTTP_201_CREATED)
 def upsert_plugin_instance(request: PluginInstanceRequest) -> dict[str, object]:
-    result = MetadataStore(settings.metadata_db_path).upsert_plugin_instance(
+    result = _store().upsert_plugin_instance(
         name=request.name,
         package_name=request.package_name,
         version=request.version,
@@ -145,7 +160,7 @@ def upsert_plugin_instance(request: PluginInstanceRequest) -> dict[str, object]:
 
 @router.put("/instances/{instance_id}")
 def update_plugin_instance(instance_id: int, request: PluginInstanceRequest) -> dict[str, object]:
-    result = MetadataStore(settings.metadata_db_path).update_plugin_instance(
+    result = _store().update_plugin_instance(
         instance_id=instance_id,
         name=request.name,
         package_name=request.package_name,
@@ -167,7 +182,7 @@ def update_plugin_instance(instance_id: int, request: PluginInstanceRequest) -> 
 
 @router.get("/instances")
 def list_plugin_instances() -> dict[str, object]:
-    return {"items": MetadataStore(settings.metadata_db_path).list_plugin_instances()}
+    return {"items": _store().list_plugin_instances()}
 
 
 @router.patch("/instances/{instance_id}/schedule")
@@ -175,7 +190,7 @@ def update_plugin_instance_schedule(
     instance_id: int,
     request: InstanceScheduleRequest,
 ) -> dict[str, object]:
-    result = MetadataStore(settings.metadata_db_path).set_plugin_instance_schedule(
+    result = _store().set_plugin_instance_schedule(
         instance_id=instance_id,
         enabled=request.enabled,
         interval_sec=request.interval_sec,
@@ -187,7 +202,7 @@ def update_plugin_instance_schedule(
 
 @router.delete("/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_plugin_instance(instance_id: int) -> None:
-    deleted = MetadataStore(settings.metadata_db_path).delete_plugin_instance(instance_id)
+    deleted = _store().delete_plugin_instance(instance_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"plugin instance not found: {instance_id}")
 
@@ -216,7 +231,7 @@ def run_package_version(package_name: str, version: str, request: RunRequest) ->
 @router.get("/runs")
 def list_runs(package_name: str | None = None, instance_id: int | None = None) -> dict[str, object]:
     return {
-        "items": MetadataStore(settings.metadata_db_path).list_plugin_runs(
+        "items": _store().list_plugin_runs(
             package_name=package_name,
             instance_id=instance_id,
         )
@@ -225,14 +240,14 @@ def list_runs(package_name: str | None = None, instance_id: int | None = None) -
 
 @router.get("/runs/{run_id}/logs")
 def list_run_logs(run_id: str) -> dict[str, object]:
-    return {"items": MetadataStore(settings.metadata_db_path).list_run_logs(run_id)}
+    return {"items": _store().list_run_logs(run_id)}
 
 
 @router.get("/writeback-records")
 def list_writeback_records(run_id: str | None = None) -> dict[str, object]:
-    return {"items": MetadataStore(settings.metadata_db_path).list_writeback_records(run_id)}
+    return {"items": _store().list_writeback_records(run_id)}
 
 
 @router.get("/audit-events")
 def list_audit_events() -> dict[str, object]:
-    return {"items": MetadataStore(settings.metadata_db_path).list_audit_events()}
+    return {"items": _store().list_audit_events()}
