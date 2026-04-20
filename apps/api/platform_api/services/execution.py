@@ -6,6 +6,7 @@ from typing import Any
 
 from platform_api.core.config import settings
 from platform_api.services.connectors import ConnectorError, build_connector, ensure_tag_access
+from platform_api.services.instance_validation import BindingValidationError, validate_execution_inputs
 from platform_api.services.manifest import PluginManifest
 from platform_api.services.metadata_store import MetadataStore
 from platform_runner.executor import LocalPythonRunner, RunnerExecutionError
@@ -33,6 +34,11 @@ def execute_plugin_version(
     manifest = PluginManifest.model_validate(version_record["manifest"])
     if manifest.spec.plugin_type != "python" or manifest.spec.entry.mode != "function":
         raise PluginExecutionError("local MVP execution only supports python:function plugins")
+
+    try:
+        validate_execution_inputs(manifest=manifest, inputs=inputs)
+    except BindingValidationError as exc:
+        raise PluginExecutionError(str(exc)) from exc
 
     run_id = f"run-{uuid.uuid4().hex}"
     started_at = datetime.now(UTC)

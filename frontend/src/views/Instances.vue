@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   deleteInstance,
   listDataSources,
@@ -20,6 +20,13 @@ import {
 
 type BindingType = 'single' | 'batch'
 type BatchOutputFormat = 'named-map' | 'ordered-list'
+
+interface ManifestInterfaceDef {
+  name: string
+  type: string
+  required: boolean
+  description: string
+}
 
 interface SourceMappingRow {
   tag: string
@@ -75,6 +82,20 @@ const inputBindings = ref<InputBindingRow[]>([])
 const outputBindings = ref<OutputBindingRow[]>([])
 let refreshTimer: number | undefined
 
+const selectedVersionRecord = computed(
+  () => pluginVersions.value.find((item) => item.version === form.value.version) ?? null,
+)
+
+const manifestInputDefs = computed(() => manifestInterfaces('inputs'))
+const manifestOutputDefs = computed(() => manifestInterfaces('outputs'))
+
+const missingRequiredInputNames = computed(() => {
+  const bound = new Set(inputBindings.value.map((binding) => binding.input_name.trim()).filter(Boolean))
+  return manifestInputDefs.value
+    .filter((item) => item.required && !bound.has(item.name))
+    .map((item) => item.name)
+})
+
 async function loadAll() {
   loading.value = true
   error.value = ''
@@ -85,6 +106,7 @@ async function loadAll() {
     recentRuns.value = await listRuns()
     await applyDefaultPlugin()
     applyDefaultDataSource()
+    ensureRequiredInputBindings()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '实例数据加载失败'
   } finally {
@@ -116,6 +138,7 @@ async function applyDefaultPlugin() {
 async function onPackageChange() {
   await loadPluginVersions(form.value.package_name)
   form.value.version = pluginVersions.value[0]?.version ?? ''
+  ensureRequiredInputBindings()
 }
 
 function applyDefaultDataSource() {
@@ -128,10 +151,10 @@ function applyDefaultDataSource() {
   }
 }
 
-function defaultInputBinding(): InputBindingRow {
+function defaultInputBinding(inputName = ''): InputBindingRow {
   return {
     binding_type: 'single',
-    input_name: '',
+    input_name: inputName,
     data_source_id: dataSources.value[0] ? String(dataSources.value[0].id) : '',
     source_tag: '',
     source_tags: [],
@@ -140,10 +163,10 @@ function defaultInputBinding(): InputBindingRow {
   }
 }
 
-function defaultOutputBinding(): OutputBindingRow {
+function defaultOutputBinding(outputName = ''): OutputBindingRow {
   return {
     binding_type: 'single',
-    output_name: '',
+    output_name: outputName,
     data_source_id: dataSources.value[0] ? String(dataSources.value[0].id) : '',
     target_tag: '',
     target_tags: [],
@@ -247,6 +270,89 @@ function clearAllOutputTags(binding: OutputBindingRow) {
   binding.target_tags = []
 }
 
+function manifestInterfaces(kind: 'inputs' | 'outputs'): ManifestInterfaceDef[] {
+  const manifest = selectedVersionRecord.value?.manifest
+  if (!isRecord(manifest) || !isRecord(manifest.spec)) return []
+  const raw = manifest.spec[kind]
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => ({
+      name: stringValue(item.name).trim(),
+      type: stringValue(item.type).trim(),
+      required: Boolean(item.required),
+      description: stringValue(item.description).trim(),
+    }))
+    .filter((item) => item.name)
+}
+
+function ensureRequiredInputBindings() {
+  if (manifestInputDefs.value.length === 0) return
+  const existing = new Set(inputBindings.value.map((binding) => binding.input_name.trim()).filter(Boolean))
+  const additions = manifestInputDefs.value
+    .filter((item) => item.required && !existing.has(item.name))
+    .map((item) => defaultInputBinding(item.name))
+  if (additions.length > 0) {
+    inputBindings.value = [...inputBindings.value, ...additions]
+    applyDefaultDataSource()
+  }
+}
+
+function isRequiredInputName(name: string) {
+  return manifestInputDefs.value.some((item) => item.name === name && item.required)
+}
+
+function validateManifestBindings(
+  normalizedInputs: Array<{ input_name: string }>,
+  normalizedOutputs: Array<{ output_name: string }>,
+) {
+  const inputNames = normalizedInputs.map((binding) => binding.input_name)
+  const outputNames = normalizedOutputs.map((binding) => binding.output_name)
+
+  const duplicateInputNames = duplicateNames(inputNames)
+  if (duplicateInputNames.length > 0) {
+    throw new Error(`插件输入绑定重复: ${duplicateInputNames.join(', ')}`)
+  }
+
+  const duplicateOutputNames = duplicateNames(outputNames)
+  if (duplicateOutputNames.length > 0) {
+    throw new Error(`插件输出绑定重复: ${duplicateOutputNames.join(', ')}`)
+  }
+
+  if (manifestInputDefs.value.length > 0) {
+    const declaredInputs = new Set(manifestInputDefs.value.map((item) => item.name))
+    const missingRequired = manifestInputDefs.value
+      .filter((item) => item.required && !inputNames.includes(item.name))
+      .map((item) => item.name)
+    if (missingRequired.length > 0) {
+      throw new Error(`缺少必填插件输入绑定: ${missingRequired.join(', ')}`)
+    }
+
+    const unknownInputs = Array.from(new Set(inputNames.filter((name) => !declaredInputs.has(name))))
+    if (unknownInputs.length > 0) {
+      throw new Error(`存在未在 manifest 中声明的插件输入: ${unknownInputs.join(', ')}`)
+    }
+  }
+
+  if (manifestOutputDefs.value.length > 0) {
+    const declaredOutputs = new Set(manifestOutputDefs.value.map((item) => item.name))
+    const unknownOutputs = Array.from(new Set(outputNames.filter((name) => !declaredOutputs.has(name))))
+    if (unknownOutputs.length > 0) {
+      throw new Error(`存在未在 manifest 中声明的插件输出: ${unknownOutputs.join(', ')}`)
+    }
+  }
+}
+
+function duplicateNames(values: string[]) {
+  const seen = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const value of values) {
+    if (seen.has(value)) duplicates.add(value)
+    else seen.add(value)
+  }
+  return Array.from(duplicates)
+}
+
 async function submit() {
   saving.value = true
   error.value = ''
@@ -320,6 +426,8 @@ async function submit() {
           dry_run: binding.dry_run,
         }
       })
+
+    validateManifestBindings(normalizedInputBindings, normalizedOutputBindings)
 
     await saveInstance({
       id: editingInstanceId.value,
@@ -438,6 +546,8 @@ async function editInstance(instance: PluginInstanceRecord) {
       dry_run: Boolean(record.dry_run ?? true),
     }
   })
+  ensureRequiredInputBindings()
+  applyDefaultDataSource()
 }
 
 function normalizeSourceMappings(value: unknown, sourceTags: string[]) {
@@ -471,6 +581,8 @@ function resetForm() {
   }
   inputBindings.value = []
   outputBindings.value = []
+  ensureRequiredInputBindings()
+  applyDefaultDataSource()
 }
 
 function findDataSource(dataSourceId: string) {
@@ -576,6 +688,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+watch(
+  manifestInputDefs,
+  () => {
+    ensureRequiredInputBindings()
+  },
+  { deep: true },
+)
+
+watch(
+  dataSources,
+  () => {
+    applyDefaultDataSource()
+  },
+  { deep: true },
+)
+
 onMounted(() => {
   loadAll()
   refreshTimer = window.setInterval(() => {
@@ -594,7 +722,7 @@ onUnmounted(() => {
       <div>
         <p class="eyebrow">Instances</p>
         <h2>运行实例</h2>
-        <p>named-map 模式支持为每个选中位点设置映射名，ordered-list 模式支持手动排序。</p>
+        <p>实例绑定现在直接参考 manifest，保存前会校验必填输入和非法输入名。</p>
       </div>
       <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
         {{ loading ? '刷新中' : '刷新' }}
@@ -639,6 +767,44 @@ onUnmounted(() => {
         允许真实回写
       </label>
 
+      <div v-if="selectedVersionRecord" class="wide-field manifest-summary">
+        <div class="manifest-block">
+          <div class="manifest-head">
+            <strong>Manifest 输入</strong>
+            <span class="muted">带 * 的为必填</span>
+          </div>
+          <div v-if="manifestInputDefs.length > 0" class="manifest-chip-grid">
+            <div
+              v-for="item in manifestInputDefs"
+              :key="item.name"
+              class="manifest-chip"
+              :class="{ required: item.required }"
+            >
+              <span>{{ item.name }}</span>
+              <small>{{ item.type || 'unknown' }}</small>
+            </div>
+          </div>
+          <div v-else class="empty-inline">当前版本未声明输入接口。</div>
+          <p v-if="missingRequiredInputNames.length > 0" class="error-inline">
+            缺少必填输入绑定：{{ missingRequiredInputNames.join(', ') }}
+          </p>
+        </div>
+
+        <div class="manifest-block">
+          <div class="manifest-head">
+            <strong>Manifest 输出</strong>
+            <span class="muted">回写绑定只能选这里声明的输出名</span>
+          </div>
+          <div v-if="manifestOutputDefs.length > 0" class="manifest-chip-grid">
+            <div v-for="item in manifestOutputDefs" :key="item.name" class="manifest-chip">
+              <span>{{ item.name }}</span>
+              <small>{{ item.type || 'unknown' }}</small>
+            </div>
+          </div>
+          <div v-else class="empty-inline">当前版本未声明输出接口。</div>
+        </div>
+      </div>
+
       <div class="wide-field binding-list">
         <div class="section-title">
           <strong>读取绑定</strong>
@@ -647,7 +813,10 @@ onUnmounted(() => {
 
         <div v-for="(binding, index) in inputBindings" :key="`in-${index}`" class="binding-card">
           <div class="binding-head">
-            <strong>读取绑定 #{{ index + 1 }}</strong>
+            <div class="binding-title-line">
+              <strong>读取绑定 #{{ index + 1 }}</strong>
+              <span v-if="isRequiredInputName(binding.input_name)" class="required-badge">必填</span>
+            </div>
             <button type="button" class="danger-button" @click="removeInputBinding(index)">删除</button>
           </div>
 
@@ -661,7 +830,13 @@ onUnmounted(() => {
             </label>
             <label>
               <span>插件输入名</span>
-              <input v-model="binding.input_name" placeholder="如 value、inputs" />
+              <select v-if="manifestInputDefs.length > 0" v-model="binding.input_name">
+                <option value="">请选择 manifest 输入</option>
+                <option v-for="item in manifestInputDefs" :key="item.name" :value="item.name">
+                  {{ item.required ? `${item.name} *` : item.name }}
+                </option>
+              </select>
+              <input v-else v-model="binding.input_name" placeholder="如 value、inputs" />
             </label>
             <label>
               <span>数据源</span>
@@ -775,7 +950,13 @@ onUnmounted(() => {
             </label>
             <label>
               <span>插件输出名</span>
-              <input v-model="binding.output_name" placeholder="如 output_020、action_batch" />
+              <select v-if="manifestOutputDefs.length > 0" v-model="binding.output_name">
+                <option value="">请选择 manifest 输出</option>
+                <option v-for="item in manifestOutputDefs" :key="item.name" :value="item.name">
+                  {{ item.name }}
+                </option>
+              </select>
+              <input v-else v-model="binding.output_name" placeholder="如 output_020、action_batch" />
             </label>
             <label>
               <span>数据源</span>
@@ -926,7 +1107,8 @@ onUnmounted(() => {
 .instances-page { max-width: 1360px; }
 .instance-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .binding-card { display: grid; gap: 12px; padding: 14px; border: 1px solid #d8e3df; border-radius: 8px; background: #fbfdfc; }
-.binding-head, .package-main, .instance-actions, .run-history-row, .mapping-head, .binding-actions-inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.binding-head, .package-main, .instance-actions, .run-history-row, .mapping-head, .binding-actions-inline, .manifest-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.binding-title-line { display: flex; align-items: center; gap: 8px; }
 .binding-basic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .binding-basic-grid label, .binding-single-grid label, .json-input { display: grid; gap: 8px; color: #2f403d; font-weight: 600; }
 .binding-basic-grid input, .binding-basic-grid select, .binding-single-grid input, .binding-single-grid select, .mapping-input, .json-input textarea { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; }
@@ -936,17 +1118,22 @@ onUnmounted(() => {
 .point-check input, .checkbox-line input { width: auto; }
 .small-note, .muted { font-size: 13px; color: #5e6f6c; }
 .empty-inline { padding: 12px; color: #5e6f6c; background: #f7faf9; border: 1px dashed #c9d7d3; border-radius: 6px; }
-.mapping-table, .run-history-item, .package-row, .status-grid > div { display: grid; gap: 10px; padding: 12px; border: 1px solid #d8e3df; border-radius: 8px; background: #ffffff; }
+.mapping-table, .run-history-item, .package-row, .status-grid > div, .manifest-block { display: grid; gap: 10px; padding: 12px; border: 1px solid #d8e3df; border-radius: 8px; background: #ffffff; }
 .mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 0.9fr); gap: 12px; align-items: center; }
 .mapping-tag { padding: 10px 12px; border: 1px solid #d8e3df; border-radius: 6px; background: #f5f8f7; overflow-wrap: anywhere; }
 .order-row { grid-template-columns: minmax(0, 1fr) auto; }
 .order-actions { display: flex; gap: 8px; }
 .small-button { min-height: 34px; padding: 0 12px; }
-.package-row, .run-history, .status-grid { margin-top: 16px; }
-.status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.package-row, .run-history, .status-grid, .manifest-summary { margin-top: 16px; }
+.status-grid, .manifest-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .status-grid span { color: #5e6f6c; font-size: 13px; }
+.manifest-chip-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.manifest-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #d8e3df; border-radius: 999px; background: #f5f8f7; }
+.manifest-chip.required { border-color: #b65353; background: #fff5f5; }
+.required-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: #b65353; color: #ffffff; font-size: 12px; font-weight: 700; }
+.error-inline { margin: 0; color: #b65353; font-size: 13px; font-weight: 700; }
 pre { white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 980px) {
-  .instance-form, .binding-basic-grid, .binding-single-grid, .point-picker-grid, .mapping-row, .order-row, .status-grid { grid-template-columns: 1fr; }
+  .instance-form, .binding-basic-grid, .binding-single-grid, .point-picker-grid, .mapping-row, .order-row, .status-grid, .manifest-summary { grid-template-columns: 1fr; }
 }
 </style>

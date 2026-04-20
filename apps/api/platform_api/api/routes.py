@@ -9,6 +9,11 @@ from platform_api.services.execution import (
     execute_plugin_instance,
     execute_plugin_version,
 )
+from platform_api.services.instance_validation import (
+    BindingValidationError,
+    validate_instance_bindings,
+)
+from platform_api.services.manifest import PluginManifest
 from platform_api.services.metadata_store import MetadataStore
 from platform_api.services.package_storage import PackageStorage, PackageStorageError
 from platform_api.services.scheduler import scheduler
@@ -22,6 +27,16 @@ def _metadata_target() -> str | object:
 
 def _store() -> MetadataStore:
     return MetadataStore(_metadata_target())
+
+
+def _load_manifest(package_name: str, version: str) -> PluginManifest:
+    version_record = _store().get_plugin_version(package_name, version)
+    if version_record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"plugin version not found: {package_name}@{version}",
+        )
+    return PluginManifest.model_validate(version_record["manifest"])
 
 
 class RunRequest(BaseModel):
@@ -148,6 +163,16 @@ def delete_data_source(data_source_id: int) -> None:
 
 @router.post("/instances", status_code=status.HTTP_201_CREATED)
 def upsert_plugin_instance(request: PluginInstanceRequest) -> dict[str, object]:
+    manifest = _load_manifest(request.package_name, request.version)
+    try:
+        validate_instance_bindings(
+            manifest=manifest,
+            input_bindings=request.input_bindings,
+            output_bindings=request.output_bindings,
+        )
+    except BindingValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     result = _store().upsert_plugin_instance(
         name=request.name,
         package_name=request.package_name,
@@ -169,6 +194,16 @@ def upsert_plugin_instance(request: PluginInstanceRequest) -> dict[str, object]:
 
 @router.put("/instances/{instance_id}")
 def update_plugin_instance(instance_id: int, request: PluginInstanceRequest) -> dict[str, object]:
+    manifest = _load_manifest(request.package_name, request.version)
+    try:
+        validate_instance_bindings(
+            manifest=manifest,
+            input_bindings=request.input_bindings,
+            output_bindings=request.output_bindings,
+        )
+    except BindingValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     result = _store().update_plugin_instance(
         instance_id=instance_id,
         name=request.name,
