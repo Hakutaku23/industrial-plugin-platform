@@ -90,7 +90,7 @@ const manifestInputDefs = computed(() => manifestInterfaces('inputs'))
 const manifestOutputDefs = computed(() => manifestInterfaces('outputs'))
 
 const missingRequiredInputNames = computed(() => {
-  const bound = new Set(inputBindings.value.map((binding) => binding.input_name.trim()).filter(Boolean))
+  const bound = new Set(collectInputBindingNames(inputBindings.value))
   return manifestInputDefs.value
     .filter((item) => item.required && !bound.has(item.name))
     .map((item) => item.name)
@@ -287,26 +287,49 @@ function manifestInterfaces(kind: 'inputs' | 'outputs'): ManifestInterfaceDef[] 
 }
 
 function ensureRequiredInputBindings() {
-  if (manifestInputDefs.value.length === 0) return
-  const existing = new Set(inputBindings.value.map((binding) => binding.input_name.trim()).filter(Boolean))
-  const additions = manifestInputDefs.value
-    .filter((item) => item.required && !existing.has(item.name))
-    .map((item) => defaultInputBinding(item.name))
-  if (additions.length > 0) {
-    inputBindings.value = [...inputBindings.value, ...additions]
-    applyDefaultDataSource()
-  }
+  // 不再自动补齐为单点绑定，避免批量绑定场景下被前端“强制单点”。
 }
 
 function isRequiredInputName(name: string) {
   return manifestInputDefs.value.some((item) => item.name === name && item.required)
 }
 
+function collectInputBindingNames(bindings: Array<Record<string, unknown>>) {
+  const names: string[] = []
+  for (const binding of bindings) {
+    const bindingType = stringValue(binding.binding_type || 'single')
+    const inputName = stringValue(binding.input_name).trim()
+    const outputFormat = stringValue(binding.output_format || 'named-map').trim()
+    if (bindingType === 'batch' && outputFormat === 'named-map' && !inputName) {
+      const sourceMappings = Array.isArray(binding.source_mappings)
+        ? binding.source_mappings
+            .filter((item): item is Record<string, unknown> => isRecord(item))
+            .map((item) => stringValue(item.key).trim())
+            .filter(Boolean)
+        : []
+      names.push(...sourceMappings)
+      continue
+    }
+    if (inputName) names.push(inputName)
+  }
+  return Array.from(new Set(names))
+}
+
+function inputBindingHasPayload(binding: InputBindingRow) {
+  if (binding.binding_type === 'single') {
+    return Boolean(binding.input_name.trim())
+  }
+  if (binding.output_format === 'named-map' && !binding.input_name.trim()) {
+    return binding.source_mappings.some((item) => item.tag.trim() || item.key.trim())
+  }
+  return Boolean(binding.input_name.trim())
+}
+
 function validateManifestBindings(
-  normalizedInputs: Array<{ input_name: string }>,
+  normalizedInputs: Array<Record<string, unknown>>,
   normalizedOutputs: Array<{ output_name: string }>,
 ) {
-  const inputNames = normalizedInputs.map((binding) => binding.input_name)
+  const inputNames = collectInputBindingNames(normalizedInputs)
   const outputNames = normalizedOutputs.map((binding) => binding.output_name)
 
   const duplicateInputNames = duplicateNames(inputNames)
@@ -361,34 +384,44 @@ async function submit() {
     if (!form.value.package_name || !form.value.version) throw new Error('请选择插件和版本')
 
     const normalizedInputBindings = inputBindings.value
-      .filter((binding) => binding.input_name.trim() && binding.data_source_id)
+      .filter((binding) => binding.data_source_id && inputBindingHasPayload(binding))
       .map((binding) => {
         if (binding.binding_type === 'batch') {
+          const input_name = binding.input_name.trim()
           const source_tags = Array.from(new Set(binding.source_tags.map((tag) => tag.trim()).filter(Boolean)))
-          if (source_tags.length === 0) throw new Error(`批量读取绑定 ${binding.input_name} 未选择任何位点`)
           if (binding.output_format === 'named-map') {
             const source_mappings = binding.source_mappings
               .map((item) => ({ tag: item.tag.trim(), key: item.key.trim() }))
               .filter((item) => item.tag && item.key)
-            if (source_mappings.length !== source_tags.length) {
-              throw new Error(`批量读取绑定 ${binding.input_name} 存在未完成的 named-map 映射`)
+            if (source_mappings.length === 0) {
+              throw new Error('批量读取绑定未完成 named-map 映射')
             }
             const keys = source_mappings.map((item) => item.key)
             if (new Set(keys).size !== keys.length) {
-              throw new Error(`批量读取绑定 ${binding.input_name} 的 named-map 键名重复`)
+              throw new Error('批量读取绑定的 named-map 键名重复')
+            }
+            if (!input_name) {
+              return {
+                binding_type: 'batch' as const,
+                data_source_id: Number(binding.data_source_id),
+                source_mappings,
+                output_format: 'named-map' as const,
+              }
             }
             return {
               binding_type: 'batch' as const,
-              input_name: binding.input_name.trim(),
+              input_name,
               data_source_id: Number(binding.data_source_id),
-              source_tags,
+              source_tags: source_tags.length > 0 ? source_tags : source_mappings.map((item) => item.tag),
               source_mappings,
               output_format: 'named-map' as const,
             }
           }
+          if (!input_name) throw new Error('ordered-list 批量读取必须指定插件输入名')
+          if (source_tags.length === 0) throw new Error(`批量读取绑定 ${input_name} 未选择任何位点`)
           return {
             binding_type: 'batch' as const,
-            input_name: binding.input_name.trim(),
+            input_name,
             data_source_id: Number(binding.data_source_id),
             source_tags,
             output_format: 'ordered-list' as const,
@@ -722,7 +755,7 @@ onUnmounted(() => {
       <div>
         <p class="eyebrow">Instances</p>
         <h2>运行实例</h2>
-        <p>实例绑定现在直接参考 manifest，保存前会校验必填输入和非法输入名。</p>
+        <p>实例绑定直接参考 manifest。批量 named-map 在输入名留空时，会按映射键展开为多个插件输入，并走一次批量读取。</p>
       </div>
       <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
         {{ loading ? '刷新中' : '刷新' }}
@@ -815,7 +848,7 @@ onUnmounted(() => {
           <div class="binding-head">
             <div class="binding-title-line">
               <strong>读取绑定 #{{ index + 1 }}</strong>
-              <span v-if="isRequiredInputName(binding.input_name)" class="required-badge">必填</span>
+              <span v-if="binding.input_name && isRequiredInputName(binding.input_name)" class="required-badge">必填</span>
             </div>
             <button type="button" class="danger-button" @click="removeInputBinding(index)">删除</button>
           </div>
@@ -837,6 +870,9 @@ onUnmounted(() => {
                 </option>
               </select>
               <input v-else v-model="binding.input_name" placeholder="如 value、inputs" />
+              <small v-if="binding.binding_type === 'batch' && binding.output_format === 'named-map'" class="muted small-note">
+                留空则按下方 named-map 键名展开为多个 manifest 输入，并通过一次批量读取完成绑定。
+              </small>
             </label>
             <label>
               <span>数据源</span>
@@ -898,7 +934,7 @@ onUnmounted(() => {
             <div v-if="binding.output_format === 'named-map' && binding.source_mappings.length > 0" class="mapping-table">
               <div class="mapping-head">
                 <strong>named-map 映射</strong>
-                <span class="muted">为每个位点填写传给插件的键名</span>
+                <span class="muted">输入名留空时，这里的键名会直接作为 manifest 输入名</span>
               </div>
               <div v-for="item in binding.source_mappings" :key="item.tag" class="mapping-row">
                 <div class="mapping-tag">{{ item.tag }}</div>

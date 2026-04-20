@@ -1,9 +1,14 @@
 import contextlib
+import importlib
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def main() -> int:
@@ -30,7 +35,7 @@ def main() -> int:
         return 2
 
     try:
-        result = _call_function(entry_path, callable_name, payload)
+        result = _call_function(package_dir, entry_path, callable_name, payload)
     except Exception as exc:
         print(f"plugin function failed: {exc}", file=sys.stderr)
         return 1
@@ -39,20 +44,58 @@ def main() -> int:
     return 0
 
 
-def _call_function(entry_path: Path, callable_name: str, payload: dict[str, Any]) -> Any:
-    module_name = f"plugin_entry_{abs(hash(entry_path))}"
-    spec = importlib.util.spec_from_file_location(module_name, entry_path)
+def _call_function(
+    package_dir: Path,
+    entry_path: Path,
+    callable_name: str,
+    payload: dict[str, Any],
+) -> Any:
+    module = _load_entry_module(package_dir, entry_path)
+    func = getattr(module, callable_name)
+    return func(payload)
+
+
+def _load_entry_module(package_dir: Path, entry_path: Path):
+    package_dir_str = str(package_dir)
+    if package_dir_str not in sys.path:
+        sys.path.insert(0, package_dir_str)
+
+    module_name = _module_name_from_entry(package_dir, entry_path)
+    if module_name is not None:
+        importlib.invalidate_caches()
+        with contextlib.redirect_stdout(sys.stderr):
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+            return importlib.import_module(module_name)
+
+    fallback_name = f"plugin_entry_{abs(hash(entry_path))}"
+    spec = importlib.util.spec_from_file_location(fallback_name, entry_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load entry module")
 
     module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
+    sys.modules[fallback_name] = module
     with contextlib.redirect_stdout(sys.stderr):
         spec.loader.exec_module(module)
-        func = getattr(module, callable_name)
-        return func(payload)
+    return module
+
+
+def _module_name_from_entry(package_dir: Path, entry_path: Path) -> str | None:
+    try:
+        relative = entry_path.relative_to(package_dir)
+    except ValueError:
+        return None
+
+    if entry_path.suffix != ".py":
+        return None
+
+    parts = list(relative.with_suffix("").parts)
+    if not parts:
+        return None
+    if any(not _IDENTIFIER_RE.match(part) for part in parts):
+        return None
+    return ".".join(parts)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

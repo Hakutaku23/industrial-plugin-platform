@@ -35,10 +35,20 @@ async function submit() {
 
 <template>
   <section class="panel">
-    <div class="intro">
-      <p class="eyebrow">Package Registry</p>
-      <h2>上传插件包</h2>
-      <p>支持 zip 与 tar.gz。包根目录必须包含 manifest.yaml。</p>
+    <div class="intro upload-intro">
+      <div>
+        <p class="eyebrow">Package Registry</p>
+        <h2>上传插件包</h2>
+        <p>支持 zip 与 tar.gz。包根目录必须包含 manifest.yaml。</p>
+      </div>
+      <a class="secondary-button template-download" href="/api/v1/templates/python-function-package.zip">
+        下载插件模板
+      </a>
+    </div>
+
+    <div class="template-hint">
+      <strong>推荐入口：</strong>
+      <span>首次编写插件时，先下载模板，再替换 runtime/main.py 与编译产物。</span>
     </div>
 
     <form class="upload-form" @submit.prevent="submit">
@@ -93,3 +103,31 @@ async function submit() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.upload-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.template-download {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.template-hint {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #d8e3df;
+  border-radius: 8px;
+  background: #f7faf9;
+  color: #314340;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+</style>

@@ -147,6 +147,61 @@ class InstanceValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_validate_instance_bindings_accepts_named_map_fanout_without_top_level_input_name(self) -> None:
+        validate_instance_bindings(
+            manifest=self.manifest,
+            input_bindings=[
+                {
+                    "binding_type": "batch",
+                    "data_source_id": 1,
+                    "output_format": "named-map",
+                    "source_mappings": [
+                        {"tag": "tag:001", "key": "input_001"},
+                        {"tag": "tag:014", "key": "input_014"},
+                    ],
+                }
+            ],
+            output_bindings=[],
+        )
+
+    def test_validate_instance_bindings_rejects_named_map_fanout_unknown_key(self) -> None:
+        with self.assertRaises(BindingValidationError) as ctx:
+            validate_instance_bindings(
+                manifest=self.manifest,
+                input_bindings=[
+                    {
+                        "binding_type": "batch",
+                        "data_source_id": 1,
+                        "output_format": "named-map",
+                        "source_mappings": [
+                            {"tag": "tag:001", "key": "input_001"},
+                            {"tag": "tag:999", "key": "input_999"},
+                        ],
+                    }
+                ],
+                output_bindings=[],
+            )
+        self.assertIn("input_999", str(ctx.exception))
+
+    def test_validate_instance_bindings_rejects_named_map_fanout_duplicate_key(self) -> None:
+        with self.assertRaises(BindingValidationError) as ctx:
+            validate_instance_bindings(
+                manifest=self.manifest,
+                input_bindings=[
+                    {
+                        "binding_type": "batch",
+                        "data_source_id": 1,
+                        "output_format": "named-map",
+                        "source_mappings": [
+                            {"tag": "tag:001", "key": "input_001"},
+                            {"tag": "tag:014", "key": "input_001"},
+                        ],
+                    }
+                ],
+                output_bindings=[],
+            )
+        self.assertIn("input_001", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

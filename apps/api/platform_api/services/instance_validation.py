@@ -13,13 +13,7 @@ def validate_instance_bindings(
     input_bindings: list[dict[str, Any]],
     output_bindings: list[dict[str, Any]],
 ) -> None:
-    _validate_named_bindings(
-        interfaces=manifest.spec.inputs,
-        bindings=input_bindings,
-        binding_name_key="input_name",
-        required_missing_message="missing required input bindings",
-        unknown_message="unknown input bindings",
-    )
+    _validate_input_bindings(interfaces=manifest.spec.inputs, bindings=input_bindings)
     _validate_named_bindings(
         interfaces=manifest.spec.outputs,
         bindings=output_bindings,
@@ -44,6 +38,114 @@ def validate_execution_inputs(*, manifest: PluginManifest, inputs: dict[str, Any
     if unknown_names:
         raise BindingValidationError(
             f"unknown plugin inputs: {', '.join(unknown_names)}"
+        )
+
+
+def _validate_input_bindings(
+    *,
+    interfaces: list[InterfaceSpec],
+    bindings: list[dict[str, Any]],
+) -> None:
+    declared_names = {item.name for item in interfaces}
+    required_names = {item.name for item in interfaces if item.required}
+    seen_names: set[str] = set()
+    duplicate_names: set[str] = set()
+    provided_names: list[str] = []
+
+    for index, binding in enumerate(bindings, start=1):
+        if not isinstance(binding, dict):
+            raise BindingValidationError(f"input_name binding #{index} must be an object")
+
+        binding_type = str(binding.get("binding_type", "single")).strip().lower() or "single"
+        if binding_type not in {"single", "batch"}:
+            raise BindingValidationError(
+                f"input_name binding #{index} uses unsupported binding_type: {binding_type}"
+            )
+
+        if binding_type == "single":
+            binding_name = str(binding.get("input_name", "")).strip()
+            if not binding_name:
+                raise BindingValidationError(f"input_name binding #{index} has an empty name")
+            source_tag = str(binding.get("source_tag", "")).strip()
+            if not source_tag:
+                raise BindingValidationError(
+                    f"single input_name binding {binding_name} has no source_tag"
+                )
+            provided_names.append(binding_name)
+            if binding_name in seen_names:
+                duplicate_names.add(binding_name)
+            seen_names.add(binding_name)
+            continue
+
+        output_format = str(binding.get("output_format", "named-map")).strip().lower() or "named-map"
+        if output_format not in {"named-map", "ordered-list"}:
+            raise BindingValidationError(
+                f"batch input binding #{index} uses unsupported output_format: {output_format}"
+            )
+
+        binding_name = str(binding.get("input_name", "")).strip()
+        source_tags = _normalize_tags(binding.get("source_tags"))
+        source_mappings = _normalize_source_mappings(binding.get("source_mappings"))
+
+        if output_format == "ordered-list":
+            if not binding_name:
+                raise BindingValidationError(
+                    f"ordered-list batch input binding #{index} must declare input_name"
+                )
+            if not source_tags:
+                raise BindingValidationError(
+                    f"batch input_name binding {binding_name} has no source_tags"
+                )
+            provided_names.append(binding_name)
+            if binding_name in seen_names:
+                duplicate_names.add(binding_name)
+            seen_names.add(binding_name)
+            continue
+
+        if binding_name:
+            read_tags = source_tags or [item["tag"] for item in source_mappings]
+            if not read_tags:
+                raise BindingValidationError(
+                    f"batch input_name binding {binding_name} has no source tags"
+                )
+            provided_names.append(binding_name)
+            if binding_name in seen_names:
+                duplicate_names.add(binding_name)
+            seen_names.add(binding_name)
+            continue
+
+        if not source_mappings:
+            raise BindingValidationError(
+                f"named-map batch input binding #{index} must declare input_name or source_mappings"
+            )
+
+        mapping_keys = [item["key"] for item in source_mappings]
+        duplicate_mapping_keys = _duplicate_names(mapping_keys)
+        if duplicate_mapping_keys:
+            raise BindingValidationError(
+                f"duplicate named-map input keys: {', '.join(duplicate_mapping_keys)}"
+            )
+
+        for mapping_key in mapping_keys:
+            provided_names.append(mapping_key)
+            if mapping_key in seen_names:
+                duplicate_names.add(mapping_key)
+            seen_names.add(mapping_key)
+
+    if duplicate_names:
+        raise BindingValidationError(
+            f"duplicate input_name values: {', '.join(sorted(duplicate_names))}"
+        )
+
+    provided_name_set = set(provided_names)
+    unknown_names = sorted(provided_name_set - declared_names)
+    if unknown_names:
+        raise BindingValidationError(f"unknown input bindings: {', '.join(unknown_names)}")
+
+    missing_required = sorted(required_names - provided_name_set)
+    if missing_required:
+        raise BindingValidationError(
+            f"missing required input bindings: {', '.join(missing_required)}"
         )
 
 
@@ -112,6 +214,21 @@ def _validate_named_bindings(
         )
 
 
+def _normalize_source_mappings(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get("tag", "")).strip()
+        key = str(item.get("key", "")).strip()
+        if not tag or not key:
+            continue
+        normalized.append({"tag": tag, "key": key})
+    return normalized
+
+
 def _normalize_tags(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -124,3 +241,14 @@ def _normalize_tags(value: Any) -> list[str]:
         normalized.append(tag)
         seen.add(tag)
     return normalized
+
+
+def _duplicate_names(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        else:
+            seen.add(value)
+    return sorted(duplicates)

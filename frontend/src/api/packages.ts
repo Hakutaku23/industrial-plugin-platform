@@ -93,6 +93,7 @@ export interface DataSourceRecord {
 }
 
 export type BindingType = 'single' | 'batch'
+export type InputBatchOutputFormat = 'named-map' | 'ordered-list'
 
 export interface SingleInputBinding {
   binding_type?: 'single'
@@ -101,12 +102,18 @@ export interface SingleInputBinding {
   source_tag: string
 }
 
+export interface BatchInputSourceMapping {
+  tag: string
+  key: string
+}
+
 export interface BatchInputBinding {
   binding_type: 'batch'
-  input_name: string
+  input_name?: string
   data_source_id: number
-  source_tags: string[]
-  output_format?: 'named-map' | 'ordered-list'
+  source_tags?: string[]
+  source_mappings?: BatchInputSourceMapping[]
+  output_format?: InputBatchOutputFormat
 }
 
 export type InputBinding = SingleInputBinding | BatchInputBinding

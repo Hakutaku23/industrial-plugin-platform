@@ -189,7 +189,7 @@ def _map_plugin_status(status: str) -> str:
 def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dict[str, Any]:
     resolved: dict[str, Any] = {}
     for binding in instance["input_bindings"]:
-        input_name = binding["input_name"]
+        input_name = str(binding.get("input_name", "")).strip()
         data_source = store.get_data_source(int(binding["data_source_id"]))
         if data_source is None:
             raise PluginExecutionError(f"input data source not found: {binding['data_source_id']}")
@@ -200,7 +200,17 @@ def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dic
                 output_format = str(binding.get("output_format", "named-map")).lower()
                 source_mappings = _normalize_source_mappings(binding.get("source_mappings"))
                 source_tags = _normalize_tags(binding.get("source_tags"))
-                read_tags = [item["tag"] for item in source_mappings] if source_mappings else source_tags
+
+                if output_format == "named-map" and not input_name:
+                    if not source_mappings:
+                        raise PluginExecutionError("named-map batch input binding without input_name has no source_mappings")
+                    read_tags = _unique_tags([item["tag"] for item in source_mappings])
+                    values_by_tag = connector.read_tags(read_tags)
+                    for item in source_mappings:
+                        resolved[item["key"]] = values_by_tag[item["tag"]]
+                    continue
+
+                read_tags = _unique_tags([item["tag"] for item in source_mappings] if source_mappings else source_tags)
                 if not read_tags:
                     raise PluginExecutionError(f"batch input binding has no source tags: {input_name}")
                 values_by_tag = connector.read_tags(read_tags)
@@ -319,16 +329,14 @@ def _normalize_source_mappings(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
     mappings: list[dict[str, str]] = []
-    seen_keys: set[str] = set()
     for item in value:
         if not isinstance(item, dict):
             continue
         tag = str(item.get("tag", "")).strip()
         key = str(item.get("key", "")).strip()
-        if not tag or not key or key in seen_keys:
+        if not tag or not key:
             continue
         mappings.append({"tag": tag, "key": key})
-        seen_keys.add(key)
     return mappings
 
 
@@ -344,6 +352,18 @@ def _normalize_tags(value: Any) -> list[str]:
         tags.append(tag)
         seen.add(tag)
     return tags
+
+
+def _unique_tags(tags: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        normalized = str(tag).strip()
+        if not normalized or normalized in seen:
+            continue
+        unique.append(normalized)
+        seen.add(normalized)
+    return unique
 
 
 def _record_writeback_result(*, store: MetadataStore, run_id: str, output_name: str, data_source_id: int, target_tag: str, value: Any, status: str, reason: str, dry_run: bool) -> dict[str, Any]:
