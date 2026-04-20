@@ -364,16 +364,53 @@ def delete_package(package_name: str, request: Request, principal: Principal = D
 
 
 @router.post('/data-sources', status_code=status.HTTP_201_CREATED)
-def upsert_data_source(request: DataSourceRequest, principal: Principal = Depends(require_permission('datasource.create'))) -> dict[str, object]:
-    result = _store().upsert_data_source(
-        name=request.name,
-        connector_type=request.connector_type,
-        config=request.config,
-        read_enabled=request.read_enabled,
-        write_enabled=request.write_enabled,
-    )
+def create_data_source(request: DataSourceRequest, principal: Principal = Depends(require_permission('datasource.create'))) -> dict[str, object]:
+    try:
+        result = _store().create_data_source(
+            name=request.name,
+            connector_type=request.connector_type,
+            config=request.config,
+            read_enabled=request.read_enabled,
+            write_enabled=request.write_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     _store().record_audit_event(
-        event_type='security.datasource.upserted',
+        event_type='security.datasource.created',
+        target_type='data_source',
+        target_id=str(result.id),
+        actor=principal.username,
+        details={'name': result.name, 'connector_type': result.connector_type},
+    )
+    return {
+        'id': result.id,
+        'name': result.name,
+        'connector_type': result.connector_type,
+        'status': result.status,
+    }
+
+
+@router.put('/data-sources/{data_source_id}')
+def update_data_source(
+    data_source_id: int,
+    request: DataSourceRequest,
+    principal: Principal = Depends(require_permission('datasource.update')),
+) -> dict[str, object]:
+    try:
+        result = _store().update_data_source(
+            data_source_id=data_source_id,
+            name=request.name,
+            connector_type=request.connector_type,
+            config=request.config,
+            read_enabled=request.read_enabled,
+            write_enabled=request.write_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail=f'data source not found: {data_source_id}')
+    _store().record_audit_event(
+        event_type='security.datasource.updated',
         target_type='data_source',
         target_id=str(result.id),
         actor=principal.username,

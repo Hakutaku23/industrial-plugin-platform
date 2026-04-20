@@ -674,6 +674,113 @@ class MetadataStore:
             ]
 
     # ---------- data sources ----------
+    def create_data_source(
+        self,
+        *,
+        name: str,
+        connector_type: str,
+        config: dict[str, Any],
+        read_enabled: bool,
+        write_enabled: bool,
+    ) -> RegisteredDataSource:
+        self.initialize()
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            existing = session.scalar(select(DataSourceModel).where(DataSourceModel.name == name))
+            if existing is not None:
+                raise ValueError(f"data source already exists: {name}")
+
+            data_source = DataSourceModel(
+                name=name,
+                connector_type=connector_type,
+                config_json=json.dumps(config, ensure_ascii=False, sort_keys=True),
+                read_enabled=1 if read_enabled else 0,
+                write_enabled=1 if write_enabled else 0,
+                status="configured",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(data_source)
+            session.flush()
+
+            session.add(
+                AuditEventModel(
+                    event_type="data_source.created",
+                    actor="local-dev",
+                    target_type="data_source",
+                    target_id=str(data_source.id),
+                    details_json=json.dumps(
+                        {"name": name, "connector_type": connector_type},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_at=now,
+                )
+            )
+            session.commit()
+            return RegisteredDataSource(
+                id=data_source.id,
+                name=data_source.name,
+                connector_type=data_source.connector_type,
+                status=data_source.status,
+            )
+
+    def update_data_source(
+        self,
+        *,
+        data_source_id: int,
+        name: str,
+        connector_type: str,
+        config: dict[str, Any],
+        read_enabled: bool,
+        write_enabled: bool,
+    ) -> RegisteredDataSource | None:
+        self.initialize()
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            data_source = session.get(DataSourceModel, data_source_id)
+            if data_source is None:
+                return None
+
+            duplicate = session.scalar(
+                select(DataSourceModel).where(
+                    DataSourceModel.name == name,
+                    DataSourceModel.id != data_source_id,
+                )
+            )
+            if duplicate is not None:
+                raise ValueError(f"data source already exists: {name}")
+
+            data_source.name = name
+            data_source.connector_type = connector_type
+            data_source.config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
+            data_source.read_enabled = 1 if read_enabled else 0
+            data_source.write_enabled = 1 if write_enabled else 0
+            data_source.status = "configured"
+            data_source.updated_at = now
+
+            session.add(
+                AuditEventModel(
+                    event_type="data_source.updated",
+                    actor="local-dev",
+                    target_type="data_source",
+                    target_id=str(data_source.id),
+                    details_json=json.dumps(
+                        {"name": name, "connector_type": connector_type},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_at=now,
+                )
+            )
+            session.commit()
+            return RegisteredDataSource(
+                id=data_source.id,
+                name=data_source.name,
+                connector_type=data_source.connector_type,
+                status=data_source.status,
+            )
+
     def upsert_data_source(
         self,
         *,

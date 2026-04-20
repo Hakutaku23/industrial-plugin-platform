@@ -4,6 +4,7 @@ import {
   deleteDataSource,
   listDataSources,
   saveDataSource,
+  updateDataSource,
   type DataSourceRecord,
 } from '../api/packages'
 
@@ -32,28 +33,44 @@ interface PointCatalogView {
 const dataSources = ref<DataSourceRecord[]>([])
 const loading = ref(false)
 const saving = ref(false)
+const editingDataSourceId = ref<number | null>(null)
 const error = ref('')
-const form = ref({
-  name: 'mock-line-a',
-  connector_type: 'mock' as 'mock' | 'redis',
-  host: '127.0.0.1',
-  port: 6379,
-  db: 0,
-  keyPrefix: '',
-  keySeparator: ':',
-  read_enabled: true,
-  write_enabled: true,
-})
-const points = ref<PointRow[]>([
-  {
-    pointClass: 'demo',
-    readEnabled: true,
-    readTag: 'demo:value',
-    writeEnabled: true,
-    writeTag: 'demo:doubled',
-    mockValue: '21',
-  },
-])
+const form = ref(defaultForm())
+const points = ref<PointRow[]>(defaultPoints())
+
+function defaultForm() {
+  return {
+    name: 'mock-line-a',
+    connector_type: 'mock' as 'mock' | 'redis',
+    host: '127.0.0.1',
+    port: 6379,
+    db: 0,
+    keyPrefix: '',
+    keySeparator: ':',
+    read_enabled: true,
+    write_enabled: true,
+  }
+}
+
+function defaultPoints(): PointRow[] {
+  return [
+    {
+      pointClass: 'demo',
+      readEnabled: true,
+      readTag: 'demo:value',
+      writeEnabled: true,
+      writeTag: 'demo:doubled',
+      mockValue: '21',
+    },
+  ]
+}
+
+function resetForm() {
+  editingDataSourceId.value = null
+  form.value = defaultForm()
+  points.value = defaultPoints()
+  error.value = ''
+}
 
 async function loadDataSources() {
   loading.value = true
@@ -95,8 +112,8 @@ function disableWrite(point: PointRow) {
   }
 }
 
-function buildConfig() {
-  const normalizedPoints = points.value
+function buildNormalizedPoints() {
+  return points.value
     .map((point) => ({
       pointClass: point.pointClass.trim(),
       canRead: point.readEnabled,
@@ -106,6 +123,69 @@ function buildConfig() {
       mockValue: point.readEnabled ? point.mockValue.trim() : '',
     }))
     .filter((point) => point.pointClass || point.readTag || point.writeTag)
+}
+
+function duplicateValues(values: string[]) {
+  const seen = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const value of values) {
+    const normalized = value.trim()
+    if (!normalized) continue
+    if (seen.has(normalized)) duplicates.add(normalized)
+    else seen.add(normalized)
+  }
+  return Array.from(duplicates)
+}
+
+function validateForm() {
+  const name = form.value.name.trim()
+  if (!name) throw new Error('请填写数据源名称')
+
+  const duplicateSource = dataSources.value.find(
+    (item) => item.name === name && item.id !== editingDataSourceId.value,
+  )
+  if (duplicateSource) {
+    throw new Error(`数据源名称已存在: ${name}`)
+  }
+
+  if (form.value.connector_type === 'redis') {
+    if (!form.value.host.trim()) throw new Error('请填写 Redis Host')
+    if (!Number.isInteger(Number(form.value.port)) || Number(form.value.port) < 0) {
+      throw new Error('Redis Port 必须为非负整数')
+    }
+    if (!Number.isInteger(Number(form.value.db)) || Number(form.value.db) < 0) {
+      throw new Error('Redis DB 必须为非负整数')
+    }
+  }
+
+  const normalizedPoints = buildNormalizedPoints()
+  for (let index = 0; index < normalizedPoints.length; index += 1) {
+    const point = normalizedPoints[index]
+    if (point.canRead && !point.readTag) {
+      throw new Error(`位点 #${index + 1} 已启用读取，但未填写读取标签`) 
+    }
+    if (point.canWrite && !point.writeTag) {
+      throw new Error(`位点 #${index + 1} 已启用回写，但未填写回写标签`)
+    }
+  }
+
+  const duplicateReadTags = duplicateValues(
+    normalizedPoints.filter((point) => point.canRead && point.readTag).map((point) => point.readTag),
+  )
+  if (duplicateReadTags.length > 0) {
+    throw new Error(`读取标签重复: ${duplicateReadTags.join(', ')}`)
+  }
+
+  const duplicateWriteTags = duplicateValues(
+    normalizedPoints.filter((point) => point.canWrite && point.writeTag).map((point) => point.writeTag),
+  )
+  if (duplicateWriteTags.length > 0) {
+    throw new Error(`回写标签重复: ${duplicateWriteTags.join(', ')}`)
+  }
+}
+
+function buildConfig() {
+  const normalizedPoints = buildNormalizedPoints()
 
   const readTags = normalizedPoints
     .filter((point) => point.canRead && point.readTag)
@@ -135,7 +215,7 @@ function buildConfig() {
   }
 
   return {
-    host: form.value.host,
+    host: form.value.host.trim(),
     port: Number(form.value.port),
     db: Number(form.value.db),
     keyPrefix: form.value.keyPrefix,
@@ -158,14 +238,21 @@ async function submit() {
   saving.value = true
   error.value = ''
   try {
-    await saveDataSource({
-      name: form.value.name,
+    validateForm()
+    const payload = {
+      name: form.value.name.trim(),
       connector_type: form.value.connector_type,
       config: buildConfig(),
       read_enabled: form.value.read_enabled,
       write_enabled: form.value.write_enabled,
-    })
+    }
+    if (editingDataSourceId.value !== null) {
+      await updateDataSource(editingDataSourceId.value, payload)
+    } else {
+      await saveDataSource(payload)
+    }
     await loadDataSources()
+    resetForm()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '数据源保存失败'
   } finally {
@@ -180,6 +267,9 @@ async function remove(source: DataSourceRecord) {
   error.value = ''
   try {
     await deleteDataSource(source.id)
+    if (editingDataSourceId.value === source.id) {
+      resetForm()
+    }
     await loadDataSources()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '数据源删除失败'
@@ -227,6 +317,77 @@ function stringify(value: unknown) {
 
 function isRecord(value: unknown): value is PointCatalogView {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function buildPointRowsFromSource(source: DataSourceRecord): PointRow[] {
+  const catalog = pointCatalog(source)
+  const pointValues = isObjectRecord(source.config.points) ? source.config.points : {}
+
+  if (catalog.length > 0) {
+    const mapped = catalog.map((point) => {
+      const resolvedReadTag = readTag(point)
+      const rawMockValue = resolvedReadTag ? pointValues[resolvedReadTag] : ''
+      return {
+        pointClass: pointClass(point),
+        readEnabled: canRead(point),
+        readTag: resolvedReadTag,
+        writeEnabled: canWrite(point),
+        writeTag: writeTag(point),
+        mockValue: rawMockValue === undefined || rawMockValue === null ? '' : String(rawMockValue),
+      }
+    })
+    return mapped.length > 0 ? mapped : defaultPoints()
+  }
+
+  const readTags = Array.isArray(source.config.readTags)
+    ? source.config.readTags
+    : Array.isArray(source.config.read_tags)
+      ? source.config.read_tags
+      : []
+  const writeTags = Array.isArray(source.config.writeTags)
+    ? source.config.writeTags
+    : Array.isArray(source.config.write_tags)
+      ? source.config.write_tags
+      : []
+  const tags = Array.from(
+    new Set(
+      [...readTags, ...writeTags]
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ),
+  )
+
+  if (tags.length === 0) return defaultPoints()
+
+  return tags.map((tag) => ({
+    pointClass: '',
+    readEnabled: readTags.includes(tag),
+    readTag: readTags.includes(tag) ? tag : '',
+    writeEnabled: writeTags.includes(tag),
+    writeTag: writeTags.includes(tag) ? tag : '',
+    mockValue: tag in pointValues ? String(pointValues[tag]) : '',
+  }))
+}
+
+function edit(source: DataSourceRecord) {
+  editingDataSourceId.value = source.id
+  form.value = {
+    name: source.name,
+    connector_type: source.connector_type,
+    host: String(source.config.host ?? '127.0.0.1'),
+    port: Number(source.config.port ?? 6379),
+    db: Number(source.config.db ?? 0),
+    keyPrefix: String(source.config.keyPrefix ?? source.config.key_prefix ?? ''),
+    keySeparator: String(source.config.keySeparator ?? source.config.key_separator ?? ':'),
+    read_enabled: source.read_enabled,
+    write_enabled: source.write_enabled,
+  }
+  points.value = buildPointRowsFromSource(source)
+  error.value = ''
 }
 
 onMounted(loadDataSources)
@@ -340,7 +501,14 @@ onMounted(loadDataSources)
         </div>
       </div>
 
-      <button type="submit" :disabled="saving">{{ saving ? '保存中' : '保存数据源' }}</button>
+      <div class="row-actions wide-field">
+        <button type="submit" :disabled="saving">
+          {{ saving ? '保存中' : editingDataSourceId === null ? '保存数据源' : '保存修改' }}
+        </button>
+        <button v-if="editingDataSourceId !== null" type="button" class="secondary-button" @click="resetForm">
+          取消编辑
+        </button>
+      </div>
     </form>
 
     <div v-for="source in dataSources" :key="source.id" class="package-row">
@@ -355,6 +523,7 @@ onMounted(loadDataSources)
         </div>
       </div>
       <div class="row-actions">
+        <button type="button" class="secondary-button" @click="edit(source)">修改</button>
         <button type="button" class="danger-button" @click="remove(source)">删除</button>
       </div>
       <div v-if="pointCatalog(source).length > 0" class="point-list">

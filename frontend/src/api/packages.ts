@@ -94,6 +94,14 @@ export interface DataSourceRecord {
   updated_at: string
 }
 
+export interface DataSourceSavePayload {
+  name: string
+  connector_type: 'mock' | 'redis'
+  config: Record<string, unknown>
+  read_enabled: boolean
+  write_enabled: boolean
+}
+
 export type BindingType = 'single' | 'batch'
 export type InputBatchOutputFormat = 'named-map' | 'ordered-list'
 
@@ -238,15 +246,22 @@ export async function listDataSources(): Promise<DataSourceRecord[]> {
   return payload.items
 }
 
-export async function saveDataSource(payload: {
-  name: string
-  connector_type: 'mock' | 'redis'
-  config: Record<string, unknown>
-  read_enabled: boolean
-  write_enabled: boolean
-}): Promise<{ id: number; name: string; connector_type: string; status: string }> {
+export async function saveDataSource(
+  payload: DataSourceSavePayload,
+): Promise<{ id: number; name: string; connector_type: string; status: string }> {
   return apiFetch('/api/v1/data-sources', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateDataSource(
+  dataSourceId: number,
+  payload: DataSourceSavePayload,
+): Promise<{ id: number; name: string; connector_type: string; status: string }> {
+  return apiFetch(`/api/v1/data-sources/${dataSourceId}`, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
