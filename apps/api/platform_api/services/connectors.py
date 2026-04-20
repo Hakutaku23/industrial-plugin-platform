@@ -76,7 +76,9 @@ class RedisConnector(Connector):
 
         config = data_source["config"]
         self.data_source = data_source
-        self.prefix = str(config.get("keyPrefix", ""))
+        self.prefix = str(config.get("keyPrefix", "")).strip()
+        raw_separator = config.get("keySeparator", ":")
+        self.separator = ":" if raw_separator is None or str(raw_separator) == "" else str(raw_separator)
         self.client = redis.Redis(
             host=config.get("host", "127.0.0.1"),
             port=int(config.get("port", 6379)),
@@ -89,9 +91,10 @@ class RedisConnector(Connector):
 
     def read_tag(self, tag: str) -> Any:
         ensure_tag_access(self.data_source, tag, "read")
-        value = self.client.get(self._key(tag))
+        key = self._key(tag)
+        value = self.client.get(key)
         if value is None:
-            raise ConnectorError(f"redis key not found: {tag}")
+            raise ConnectorError(f"redis key not found: {key}")
         return _coerce_scalar(value)
 
     def write_tag(self, tag: str, value: Any) -> None:
@@ -101,11 +104,12 @@ class RedisConnector(Connector):
     def read_tags(self, tags: list[str]) -> dict[str, Any]:
         for tag in tags:
             ensure_tag_access(self.data_source, tag, "read")
-        values = self.client.mget([self._key(tag) for tag in tags])
+        keys = [self._key(tag) for tag in tags]
+        values = self.client.mget(keys)
         result: dict[str, Any] = {}
-        for tag, value in zip(tags, values):
+        for tag, key, value in zip(tags, keys, values):
             if value is None:
-                raise ConnectorError(f"redis key not found: {tag}")
+                raise ConnectorError(f"redis key not found: {key}")
             result[tag] = _coerce_scalar(value)
         return result
 
@@ -113,20 +117,31 @@ class RedisConnector(Connector):
         for tag in values:
             ensure_tag_access(self.data_source, tag, "write")
         pipe = self.client.pipeline(transaction=False)
+        resolved_keys: list[tuple[str, str, Any]] = []
         for tag, value in values.items():
-            pipe.set(self._key(tag), value)
+            key = self._key(tag)
+            resolved_keys.append((tag, key, value))
+            pipe.set(key, value)
         executed = pipe.execute()
         results: dict[str, dict[str, Any]] = {}
-        for (tag, value), ok in zip(values.items(), executed):
+        for (tag, key, value), ok in zip(resolved_keys, executed):
             results[tag] = {
                 "status": "success" if ok else "failed",
                 "value": value,
-                "reason": "" if ok else "redis pipeline set failed",
+                "reason": "" if ok else f"redis pipeline set failed: {key}",
             }
         return results
 
     def _key(self, tag: str) -> str:
-        return f"{self.prefix}{tag}"
+        normalized_tag = str(tag).strip()
+        if not self.prefix:
+            return normalized_tag
+
+        if self.prefix.endswith(self.separator):
+            return f"{self.prefix}{normalized_tag}"
+        if normalized_tag.startswith(self.separator):
+            return f"{self.prefix}{normalized_tag}"
+        return f"{self.prefix}{self.separator}{normalized_tag}"
 
 
 def build_connector(data_source: dict[str, Any], store) -> Connector:

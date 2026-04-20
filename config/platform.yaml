@@ -1,63 +1,50 @@
 # Industrial Plugin Platform deploy-time configuration
 #
-# This file is intended for platform-wide settings that affect the local API
-# process, scheduler behavior, storage layout, runner defaults, and connector
-# defaults.
+# Local offline verification profile:
+# - Redis runs in Docker and is accessed from the host machine through 127.0.0.1:6379
+# - MySQL runs in Docker and is accessed from the host machine through 127.0.0.1:3306
+# - Metadata storage is switched from SQLite to MySQL
 #
-# Do NOT store runtime metadata here. Data sources, plugin instances, bindings,
-# run records, and audit events should remain in the metadata database.
+# Important:
+# 1. The password in the MySQL URL uses URL encoding for "!" -> %21
+# 2. The actual MySQL password remains exactly: PSELAB!2025.
 
 app:
-  # Logical application name used for identification and local debugging.
   name: industrial-plugin-platform
-
-  # Current deployment environment. Typical values: dev / test / prod.
   environment: dev
 
 storage:
-  # Root directory where uploaded plugin packages are unpacked and persisted.
   package_storage_dir: var/packages
-
-  # Root directory where run payloads, temp files, and runner artifacts live.
   run_storage_dir: var/runs
 
 metadata:
-  # Metadata backend selector.
-  # First MVP supports sqlite and URL-based backends through SQLAlchemy.
-  backend: sqlite
+  # Switched from sqlite to mysql for local validation.
+  backend: mysql
 
-  # Local SQLite database path used when backend=sqlite and db_url is empty.
+  # Retained only as a fallback field; unused while db_url is set.
   sqlite_path: var/platform.sqlite3
 
-  # Optional SQLAlchemy database URL.
-  # Example: postgresql+psycopg://user:pass@127.0.0.1:5432/platform
-  # When provided, it takes precedence over sqlite_path.
-  db_url: null
+  # Actual user/password:
+  #   user     = platform
+  #   password = PSELAB!2025.
+  #
+  # In URL form, "!" must be encoded as %21.
+  db_url: "mysql+pymysql://platform:PSELAB%212025.@127.0.0.1:3306/industrial_plugin_platform?charset=utf8mb4"
 
 scheduler:
-  # Whether the in-process scheduler starts with the API service.
   enabled: true
-
-  # Poll interval for due scheduled instances.
   poll_interval_sec: 1.0
 
 runner:
-  # Default timeout for runner executions when the plugin does not specify one.
   default_timeout_sec: 30
-
-  # Upper safety bound that platform code may enforce later.
   max_timeout_sec: 300
-
-  # Working root for runner-generated files.
   work_root: var/runs
 
 logging:
-  # Basic process log level.
   level: INFO
 
 connectors:
   redis:
-    # Default connection parameters used when a Redis data source omits them.
     default_host: 127.0.0.1
     default_port: 6379
     default_db: 0

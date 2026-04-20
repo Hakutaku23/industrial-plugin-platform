@@ -21,12 +21,18 @@ import {
 type BindingType = 'single' | 'batch'
 type BatchOutputFormat = 'named-map' | 'ordered-list'
 
+interface SourceMappingRow {
+  tag: string
+  key: string
+}
+
 interface InputBindingRow {
   binding_type: BindingType
   input_name: string
   data_source_id: string
   source_tag: string
   source_tags: string[]
+  source_mappings: SourceMappingRow[]
   output_format: BatchOutputFormat
 }
 
@@ -129,6 +135,7 @@ function defaultInputBinding(): InputBindingRow {
     data_source_id: dataSources.value[0] ? String(dataSources.value[0].id) : '',
     source_tag: '',
     source_tags: [],
+    source_mappings: [],
     output_format: 'named-map',
   }
 }
@@ -164,6 +171,7 @@ function switchInputBindingType(binding: InputBindingRow, type: BindingType) {
   binding.binding_type = type
   binding.source_tag = ''
   binding.source_tags = []
+  binding.source_mappings = []
 }
 
 function switchOutputBindingType(binding: OutputBindingRow, type: BindingType) {
@@ -182,19 +190,53 @@ function outputOptions(binding: OutputBindingRow) {
   return source ? getWritePointOptions(source) : []
 }
 
-function toggleSelection(selected: string[], tag: string, checked: boolean) {
-  const next = new Set(selected)
+function sanitizePointKey(tag: string) {
+  return tag.trim().replace(/[^A-Za-z0-9_]/g, '_')
+}
+
+function syncSourceMappings(binding: InputBindingRow) {
+  const selected = Array.from(new Set(binding.source_tags.map((tag) => tag.trim()).filter(Boolean)))
+  const previous = new Map(binding.source_mappings.map((item) => [item.tag, item.key]))
+  binding.source_mappings = selected.map((tag) => ({
+    tag,
+    key: previous.get(tag) || sanitizePointKey(tag),
+  }))
+  binding.source_tags = selected
+}
+
+function updateInputTagSelection(binding: InputBindingRow, tag: string, checked: boolean) {
+  const next = new Set(binding.source_tags)
   if (checked) next.add(tag)
   else next.delete(tag)
-  return Array.from(next)
+  binding.source_tags = Array.from(next)
+  syncSourceMappings(binding)
 }
 
 function selectAllInputTags(binding: InputBindingRow) {
   binding.source_tags = inputOptions(binding).map((point) => point.tag)
+  syncSourceMappings(binding)
 }
 
 function clearAllInputTags(binding: InputBindingRow) {
   binding.source_tags = []
+  binding.source_mappings = []
+}
+
+function moveInputTag(binding: InputBindingRow, index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= binding.source_tags.length) return
+  const swapped = [...binding.source_tags]
+  ;[swapped[index], swapped[target]] = [swapped[target], swapped[index]]
+  binding.source_tags = swapped
+  syncSourceMappings(binding)
+}
+
+function updateMappingKey(binding: InputBindingRow, tag: string, value: string) {
+  const next = value.trim()
+  const duplicate = binding.source_mappings.some((item) => item.tag !== tag && item.key === next)
+  binding.source_mappings = binding.source_mappings.map((item) =>
+    item.tag === tag ? { ...item, key: duplicate ? item.key : next } : item,
+  )
 }
 
 function selectAllOutputTags(binding: OutputBindingRow) {
@@ -218,12 +260,32 @@ async function submit() {
         if (binding.binding_type === 'batch') {
           const source_tags = Array.from(new Set(binding.source_tags.map((tag) => tag.trim()).filter(Boolean)))
           if (source_tags.length === 0) throw new Error(`批量读取绑定 ${binding.input_name} 未选择任何位点`)
+          if (binding.output_format === 'named-map') {
+            const source_mappings = binding.source_mappings
+              .map((item) => ({ tag: item.tag.trim(), key: item.key.trim() }))
+              .filter((item) => item.tag && item.key)
+            if (source_mappings.length !== source_tags.length) {
+              throw new Error(`批量读取绑定 ${binding.input_name} 存在未完成的 named-map 映射`)
+            }
+            const keys = source_mappings.map((item) => item.key)
+            if (new Set(keys).size !== keys.length) {
+              throw new Error(`批量读取绑定 ${binding.input_name} 的 named-map 键名重复`)
+            }
+            return {
+              binding_type: 'batch' as const,
+              input_name: binding.input_name.trim(),
+              data_source_id: Number(binding.data_source_id),
+              source_tags,
+              source_mappings,
+              output_format: 'named-map' as const,
+            }
+          }
           return {
             binding_type: 'batch' as const,
             input_name: binding.input_name.trim(),
             data_source_id: Number(binding.data_source_id),
             source_tags,
-            output_format: binding.output_format,
+            output_format: 'ordered-list' as const,
           }
         }
         if (!binding.source_tag.trim()) throw new Error(`读取绑定 ${binding.input_name} 未选择位点`)
@@ -353,12 +415,15 @@ async function editInstance(instance: PluginInstanceRecord) {
   await loadPluginVersions(instance.package_name)
   inputBindings.value = instance.input_bindings.map((binding) => {
     const record = binding as unknown as Record<string, unknown>
+    const source_tags = arrayOfStrings(record.source_tags)
+    const source_mappings = normalizeSourceMappings(record.source_mappings, source_tags)
     return {
       binding_type: normalizeBindingType(record.binding_type),
       input_name: stringValue(record.input_name),
       data_source_id: stringValue(record.data_source_id),
       source_tag: stringValue(record.source_tag),
-      source_tags: arrayOfStrings(record.source_tags),
+      source_tags,
+      source_mappings,
       output_format: normalizeOutputFormat(record.output_format),
     }
   })
@@ -373,6 +438,16 @@ async function editInstance(instance: PluginInstanceRecord) {
       dry_run: Boolean(record.dry_run ?? true),
     }
   })
+}
+
+function normalizeSourceMappings(value: unknown, sourceTags: string[]) {
+  const mappings = Array.isArray(value)
+    ? value
+        .filter((item): item is Record<string, unknown> => isRecord(item))
+        .map((item) => ({ tag: stringValue(item.tag), key: stringValue(item.key) }))
+        .filter((item) => item.tag && item.key)
+    : []
+  return mappings.length > 0 ? mappings : sourceTags.map((tag) => ({ tag, key: sanitizePointKey(tag) }))
 }
 
 function normalizeBindingType(value: unknown): BindingType {
@@ -519,7 +594,7 @@ onUnmounted(() => {
       <div>
         <p class="eyebrow">Instances</p>
         <h2>运行实例</h2>
-        <p>支持单点与批量绑定。批量模式可直接从已配置位点中勾选，不再手工逐个填写 key。</p>
+        <p>named-map 模式支持为每个选中位点设置映射名，ordered-list 模式支持手动排序。</p>
       </div>
       <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
         {{ loading ? '刷新中' : '刷新' }}
@@ -530,11 +605,11 @@ onUnmounted(() => {
 
     <form class="config-form instance-form" @submit.prevent="submit">
       <label>
-        实例名
+        <span>实例名</span>
         <input v-model="form.name" />
       </label>
       <label>
-        插件名
+        <span>插件名</span>
         <select v-model="form.package_name" @change="onPackageChange">
           <option value="">请先上传插件包</option>
           <option v-for="plugin in pluginPackages" :key="plugin.id" :value="plugin.name">
@@ -543,7 +618,7 @@ onUnmounted(() => {
         </select>
       </label>
       <label>
-        版本
+        <span>版本</span>
         <select v-model="form.version" :disabled="pluginVersions.length === 0">
           <option value="">请选择版本</option>
           <option v-for="version in pluginVersions" :key="version.id" :value="version.version">
@@ -552,7 +627,7 @@ onUnmounted(() => {
         </select>
       </label>
       <label>
-        定时间隔（秒）
+        <span>定时间隔（秒）</span>
         <input v-model.number="form.schedule_interval_sec" type="number" min="5" step="1" />
       </label>
       <label class="checkbox-line">
@@ -578,19 +653,19 @@ onUnmounted(() => {
 
           <div class="binding-basic-grid">
             <label>
-              绑定模式
+              <span>绑定模式</span>
               <select v-model="binding.binding_type" @change="switchInputBindingType(binding, binding.binding_type)">
                 <option value="single">单点</option>
                 <option value="batch">批量</option>
               </select>
             </label>
             <label>
-              插件输入名
-              <input v-model="binding.input_name" placeholder="如 value、state_batch" />
+              <span>插件输入名</span>
+              <input v-model="binding.input_name" placeholder="如 value、inputs" />
             </label>
             <label>
-              数据源
-              <select v-model="binding.data_source_id" @change="binding.source_tag = ''; binding.source_tags = []">
+              <span>数据源</span>
+              <select v-model="binding.data_source_id" @change="binding.source_tag = ''; binding.source_tags = []; binding.source_mappings = []">
                 <option value="">请选择数据源</option>
                 <option v-for="source in dataSources" :key="source.id" :value="String(source.id)">
                   {{ source.name }}
@@ -602,7 +677,7 @@ onUnmounted(() => {
           <template v-if="binding.binding_type === 'single'">
             <div class="binding-single-grid">
               <label>
-                位点选择
+                <span>位点选择</span>
                 <select v-model="binding.source_tag">
                   <option value="">请选择可读位点</option>
                   <option v-for="point in inputOptions(binding)" :key="point.tag" :value="point.tag">
@@ -611,7 +686,7 @@ onUnmounted(() => {
                 </select>
               </label>
               <label>
-                手动 Redis Key / 位点
+                <span>手动 Redis Key / 位点</span>
                 <input v-model="binding.source_tag" placeholder="如 sthb:DCS_AO_RTO_014_AI" />
               </label>
             </div>
@@ -620,7 +695,7 @@ onUnmounted(() => {
           <template v-else>
             <div class="binding-basic-grid">
               <label>
-                批量输出格式
+                <span>批量输出格式</span>
                 <select v-model="binding.output_format">
                   <option value="named-map">named-map</option>
                   <option value="ordered-list">ordered-list</option>
@@ -632,17 +707,48 @@ onUnmounted(() => {
                 <span class="muted">已选 {{ binding.source_tags.length }} 个</span>
               </div>
             </div>
+
             <div v-if="inputOptions(binding).length > 0" class="point-picker-grid">
               <label v-for="point in inputOptions(binding)" :key="point.tag" class="point-check">
                 <input
                   type="checkbox"
                   :checked="binding.source_tags.includes(point.tag)"
-                  @change="binding.source_tags = toggleSelection(binding.source_tags, point.tag, ($event.target as HTMLInputElement).checked)"
+                  @change="updateInputTagSelection(binding, point.tag, ($event.target as HTMLInputElement).checked)"
                 />
                 <span>{{ point.label }}</span>
               </label>
             </div>
             <div v-else class="empty-inline">当前数据源未配置可读位点。</div>
+
+            <div v-if="binding.output_format === 'named-map' && binding.source_mappings.length > 0" class="mapping-table">
+              <div class="mapping-head">
+                <strong>named-map 映射</strong>
+                <span class="muted">为每个位点填写传给插件的键名</span>
+              </div>
+              <div v-for="item in binding.source_mappings" :key="item.tag" class="mapping-row">
+                <div class="mapping-tag">{{ item.tag }}</div>
+                <input
+                  class="mapping-input"
+                  :value="item.key"
+                  @input="updateMappingKey(binding, item.tag, ($event.target as HTMLInputElement).value)"
+                  placeholder="如 input_014"
+                />
+              </div>
+            </div>
+
+            <div v-if="binding.output_format === 'ordered-list' && binding.source_tags.length > 0" class="mapping-table">
+              <div class="mapping-head">
+                <strong>ordered-list 顺序</strong>
+                <span class="muted">插件收到的列表值将严格按这里的顺序排列</span>
+              </div>
+              <div v-for="(tag, orderIndex) in binding.source_tags" :key="tag" class="mapping-row order-row">
+                <div class="mapping-tag">#{{ orderIndex + 1 }} · {{ tag }}</div>
+                <div class="order-actions">
+                  <button type="button" class="secondary-button small-button" @click="moveInputTag(binding, orderIndex, -1)">上移</button>
+                  <button type="button" class="secondary-button small-button" @click="moveInputTag(binding, orderIndex, 1)">下移</button>
+                </div>
+              </div>
+            </div>
           </template>
         </div>
       </div>
@@ -661,18 +767,18 @@ onUnmounted(() => {
 
           <div class="binding-basic-grid">
             <label>
-              绑定模式
+              <span>绑定模式</span>
               <select v-model="binding.binding_type" @change="switchOutputBindingType(binding, binding.binding_type)">
                 <option value="single">单点</option>
                 <option value="batch">批量</option>
               </select>
             </label>
             <label>
-              插件输出名
-              <input v-model="binding.output_name" placeholder="如 doubled、action_batch" />
+              <span>插件输出名</span>
+              <input v-model="binding.output_name" placeholder="如 output_020、action_batch" />
             </label>
             <label>
-              数据源
+              <span>数据源</span>
               <select v-model="binding.data_source_id" @change="binding.target_tag = ''; binding.target_tags = []">
                 <option value="">请选择数据源</option>
                 <option v-for="source in dataSources" :key="source.id" :value="String(source.id)">
@@ -689,7 +795,7 @@ onUnmounted(() => {
           <template v-if="binding.binding_type === 'single'">
             <div class="binding-single-grid">
               <label>
-                位点选择
+                <span>位点选择</span>
                 <select v-model="binding.target_tag">
                   <option value="">请选择可写位点</option>
                   <option v-for="point in outputOptions(binding)" :key="point.tag" :value="point.tag">
@@ -698,8 +804,8 @@ onUnmounted(() => {
                 </select>
               </label>
               <label>
-                手动 Redis Key / 位点
-                <input v-model="binding.target_tag" placeholder="如 sthb:DCS_AO_RTO_014_AO" />
+                <span>手动 Redis Key / 位点</span>
+                <input v-model="binding.target_tag" placeholder="如 sthb:DCS_AO_RTO_020_AI" />
               </label>
             </div>
           </template>
@@ -710,13 +816,13 @@ onUnmounted(() => {
               <button type="button" class="secondary-button" @click="clearAllOutputTags(binding)">清空</button>
               <span class="muted">已选 {{ binding.target_tags.length }} 个</span>
             </div>
-            <div class="muted small-note">批量回写时，插件输出 <code>{{ binding.output_name || 'action_batch' }}</code> 应返回一个对象，键名直接使用目标位点名。</div>
+            <div class="muted small-note">批量回写时，插件输出应返回对象，键名直接使用目标位点名。</div>
             <div v-if="outputOptions(binding).length > 0" class="point-picker-grid">
               <label v-for="point in outputOptions(binding)" :key="point.tag" class="point-check">
                 <input
                   type="checkbox"
                   :checked="binding.target_tags.includes(point.tag)"
-                  @change="binding.target_tags = toggleSelection(binding.target_tags, point.tag, ($event.target as HTMLInputElement).checked)"
+                  @change="binding.target_tags = (($event.target as HTMLInputElement).checked ? [...new Set([...binding.target_tags, point.tag])] : binding.target_tags.filter((tag) => tag !== point.tag))"
                 />
                 <span>{{ point.label }}</span>
               </label>
@@ -727,7 +833,7 @@ onUnmounted(() => {
       </div>
 
       <label class="json-input wide-field">
-        实例配置 JSON
+        <span>实例配置 JSON</span>
         <textarea v-model="form.configText" rows="4" spellcheck="false"></textarea>
       </label>
       <div class="form-actions wide-field">
@@ -794,6 +900,7 @@ onUnmounted(() => {
       </div>
 
       <pre>{{ stringify({ input_bindings: instance.input_bindings, output_bindings: instance.output_bindings }) }}</pre>
+
       <div class="run-history">
         <strong>最近运行</strong>
         <div v-if="recentRunsForInstance(instance).length === 0" class="muted">
@@ -809,6 +916,7 @@ onUnmounted(() => {
           <pre>{{ stringify({ outputs: run.outputs, error: run.error }) }}</pre>
         </div>
       </div>
+
       <pre v-if="runResults[instance.id]">{{ stringify(runResults[instance.id]) }}</pre>
     </div>
   </section>
@@ -818,20 +926,27 @@ onUnmounted(() => {
 .instances-page { max-width: 1360px; }
 .instance-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .binding-card { display: grid; gap: 12px; padding: 14px; border: 1px solid #d8e3df; border-radius: 8px; background: #fbfdfc; }
-.binding-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.binding-head, .package-main, .instance-actions, .run-history-row, .mapping-head, .binding-actions-inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .binding-basic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.binding-basic-grid label, .binding-single-grid label { display: grid; gap: 8px; color: #2f403d; font-weight: 600; }
-.binding-basic-grid input, .binding-basic-grid select, .binding-single-grid input, .binding-single-grid select {
-  width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px;
-}
+.binding-basic-grid label, .binding-single-grid label, .json-input { display: grid; gap: 8px; color: #2f403d; font-weight: 600; }
+.binding-basic-grid input, .binding-basic-grid select, .binding-single-grid input, .binding-single-grid select, .mapping-input, .json-input textarea { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; }
 .binding-single-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.binding-actions-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .point-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .point-check { display: flex !important; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #d8e3df; border-radius: 8px; background: #ffffff; font-weight: 500; }
-.point-check input { width: auto; }
-.small-note { font-size: 13px; }
+.point-check input, .checkbox-line input { width: auto; }
+.small-note, .muted { font-size: 13px; color: #5e6f6c; }
 .empty-inline { padding: 12px; color: #5e6f6c; background: #f7faf9; border: 1px dashed #c9d7d3; border-radius: 6px; }
+.mapping-table, .run-history-item, .package-row, .status-grid > div { display: grid; gap: 10px; padding: 12px; border: 1px solid #d8e3df; border-radius: 8px; background: #ffffff; }
+.mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 0.9fr); gap: 12px; align-items: center; }
+.mapping-tag { padding: 10px 12px; border: 1px solid #d8e3df; border-radius: 6px; background: #f5f8f7; overflow-wrap: anywhere; }
+.order-row { grid-template-columns: minmax(0, 1fr) auto; }
+.order-actions { display: flex; gap: 8px; }
+.small-button { min-height: 34px; padding: 0 12px; }
+.package-row, .run-history, .status-grid { margin-top: 16px; }
+.status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.status-grid span { color: #5e6f6c; font-size: 13px; }
+pre { white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 980px) {
-  .instance-form, .binding-basic-grid, .binding-single-grid, .point-picker-grid { grid-template-columns: 1fr; }
+  .instance-form, .binding-basic-grid, .binding-single-grid, .point-picker-grid, .mapping-row, .order-row, .status-grid { grid-template-columns: 1fr; }
 }
 </style>

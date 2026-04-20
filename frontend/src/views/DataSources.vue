@@ -40,6 +40,7 @@ const form = ref({
   port: 6379,
   db: 0,
   keyPrefix: '',
+  keySeparator: ':',
   read_enabled: true,
   write_enabled: true,
 })
@@ -138,6 +139,7 @@ function buildConfig() {
     port: Number(form.value.port),
     db: Number(form.value.db),
     keyPrefix: form.value.keyPrefix,
+    keySeparator: form.value.keySeparator || ':',
     pointCatalog,
     readTags,
     writeTags,
@@ -281,7 +283,11 @@ onMounted(loadDataSources)
         </label>
         <label>
           Key 前缀
-          <input v-model="form.keyPrefix" />
+          <input v-model="form.keyPrefix" placeholder="如 sthb" />
+        </label>
+        <label>
+          Key 分隔符
+          <input v-model="form.keySeparator" placeholder="默认 :" />
         </label>
       </template>
 
@@ -293,9 +299,9 @@ onMounted(loadDataSources)
         <div class="point-grid point-grid-head" :class="{ 'point-grid-mock': form.connector_type === 'mock' }">
           <span>点所属类</span>
           <span>读取</span>
-          <span>读取标签 / Redis Key</span>
+          <span>读取标签 / Redis 位点名</span>
           <span>回写</span>
-          <span>回写标签 / Redis Key</span>
+          <span>回写标签 / Redis 位点名</span>
           <span v-if="form.connector_type === 'mock'">Mock 值</span>
           <span>操作</span>
         </div>
@@ -313,7 +319,7 @@ onMounted(loadDataSources)
           <input
             v-model="point.readTag"
             :disabled="!point.readEnabled"
-            placeholder="如 sthb:DCS_AO_RTO_014_AI"
+            placeholder="如 DCS_AO_RTO_014_AI"
           />
           <label class="inline-check">
             <input v-model="point.writeEnabled" type="checkbox" @change="disableWrite(point)" />
@@ -322,7 +328,7 @@ onMounted(loadDataSources)
           <input
             v-model="point.writeTag"
             :disabled="!point.writeEnabled"
-            placeholder="如 sthb:DCS_AO_RTO_014_AO"
+            placeholder="如 DCS_AO_RTO_020_AI"
           />
           <input
             v-if="form.connector_type === 'mock'"

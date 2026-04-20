@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:latest
+    container_name: ipp-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  mysql:
+    image: mysql:8.4
+    container_name: ipp-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "PSELAB!2025."
+      MYSQL_DATABASE: "industrial_plugin_platform"
+      MYSQL_USER: "platform"
+      MYSQL_PASSWORD: "PSELAB!2025."
+      TZ: "Asia/Shanghai"
+    command:
+      [
+        "mysqld",
+        "--character-set-server=utf8mb4",
+        "--collation-server=utf8mb4_0900_ai_ci",
+        "--default-time-zone=+08:00"
+      ]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uplatform -p'PSELAB!2025.' --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  redis_data:
+  mysql_data:

@@ -69,10 +69,7 @@ def execute_plugin_version(
         )
         outputs = runner_result.outputs
         metrics = runner_result.metrics
-        logs.extend(
-            {"source": "plugin", "level": "INFO", "message": message}
-            for message in runner_result.logs
-        )
+        logs.extend({"source": "plugin", "level": "INFO", "message": message} for message in runner_result.logs)
         if runner_result.stderr:
             logs.append({"source": "plugin_stderr", "level": "WARN", "message": runner_result.stderr[-2000:]})
         status = _map_plugin_status(runner_result.status)
@@ -103,14 +100,7 @@ def execute_plugin_version(
         finished_at=finished_at,
     )
 
-    return {
-        "id": recorded.id,
-        "run_id": recorded.run_id,
-        "status": recorded.status,
-        "outputs": outputs,
-        "metrics": metrics,
-        "error": error or {},
-    }
+    return {"id": recorded.id, "run_id": recorded.run_id, "status": recorded.status, "outputs": outputs, "metrics": metrics, "error": error or {}}
 
 
 def execute_plugin_instance(
@@ -127,15 +117,8 @@ def execute_plugin_instance(
     resolved_inputs: dict[str, Any] = {}
     try:
         resolved_inputs = _resolve_bound_inputs(instance, metadata_store)
-    except Exception as exc:  # noqa: BLE001
-        return _record_failed_instance_run(
-            metadata_store=metadata_store,
-            instance=instance,
-            trigger_type=trigger_type,
-            inputs=resolved_inputs,
-            error_code="E_INPUT_BINDING_FAILED",
-            error_message=str(exc),
-        )
+    except Exception as exc:
+        return _record_failed_instance_run(metadata_store=metadata_store, instance=instance, trigger_type=trigger_type, inputs=resolved_inputs, error_code="E_INPUT_BINDING_FAILED", error_message=str(exc))
 
     try:
         result = execute_plugin_version(
@@ -148,64 +131,21 @@ def execute_plugin_instance(
             store=metadata_store,
         )
     except PluginExecutionError as exc:
-        return _record_failed_instance_run(
-            metadata_store=metadata_store,
-            instance=instance,
-            trigger_type=trigger_type,
-            inputs=resolved_inputs,
-            error_code="E_EXECUTION_SETUP_FAILED",
-            error_message=str(exc),
-        )
+        return _record_failed_instance_run(metadata_store=metadata_store, instance=instance, trigger_type=trigger_type, inputs=resolved_inputs, error_code="E_EXECUTION_SETUP_FAILED", error_message=str(exc))
 
     try:
-        writeback = _apply_output_bindings(
-            run_id=result["run_id"],
-            outputs=result["outputs"],
-            instance=instance,
-            store=metadata_store,
-        )
-    except Exception as exc:  # noqa: BLE001
-        metadata_store.record_audit_event(
-            event_type="plugin.instance.writeback_failed",
-            target_type="plugin_instance",
-            target_id=str(instance_id),
-            details={
-                "message": str(exc),
-                "run_id": result["run_id"],
-                "exception_type": type(exc).__name__,
-            },
-        )
-        writeback = [
-            {
-                "output_name": "*",
-                "data_source_id": -1,
-                "target_tag": "*",
-                "value": None,
-                "status": "failed",
-                "reason": str(exc),
-                "dry_run": True,
-            }
-        ]
-
+        writeback = _apply_output_bindings(run_id=result["run_id"], outputs=result["outputs"], instance=instance, store=metadata_store)
+    except Exception as exc:
+        metadata_store.record_audit_event(event_type="plugin.instance.writeback_failed", target_type="plugin_instance", target_id=str(instance_id), details={"message": str(exc), "run_id": result["run_id"], "exception_type": type(exc).__name__})
+        writeback = [{"output_name": "*", "data_source_id": -1, "target_tag": "*", "value": None, "status": "failed", "reason": str(exc), "dry_run": True}]
     return {**result, "inputs": resolved_inputs, "writeback": writeback}
 
 
-def _record_failed_instance_run(
-    *,
-    metadata_store: MetadataStore,
-    instance: dict[str, Any],
-    trigger_type: str,
-    inputs: dict[str, Any],
-    error_code: str,
-    error_message: str,
-) -> dict[str, Any]:
+def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict[str, Any], trigger_type: str, inputs: dict[str, Any], error_code: str, error_message: str) -> dict[str, Any]:
     started_at = datetime.now(UTC)
     version_record = metadata_store.get_plugin_version(instance["package_name"], instance["version"])
     if version_record is None:
-        raise PluginExecutionError(
-            f"plugin version not found for instance: {instance['package_name']}@{instance['version']}"
-        )
-
+        raise PluginExecutionError(f"plugin version not found for instance: {instance['package_name']}@{instance['version']}")
     run_id = f"run-{uuid.uuid4().hex}"
     recorded = metadata_store.record_plugin_run(
         run_id=run_id,
@@ -218,34 +158,17 @@ def _record_failed_instance_run(
         inputs=inputs,
         outputs={},
         metrics={},
-        logs=[
-            {
-                "source": "scheduler" if trigger_type == "schedule" else "runner",
-                "level": "ERROR",
-                "message": error_message,
-            }
-        ],
+        logs=[{"source": "scheduler" if trigger_type == "schedule" else "runner", "level": "ERROR", "message": error_message}],
         error={"code": error_code, "message": error_message},
         started_at=started_at,
         finished_at=datetime.now(UTC),
     )
-    return {
-        "id": recorded.id,
-        "run_id": recorded.run_id,
-        "status": recorded.status,
-        "inputs": inputs,
-        "outputs": {},
-        "metrics": {},
-        "error": {"code": error_code, "message": error_message},
-        "writeback": [],
-    }
+    return {"id": recorded.id, "run_id": recorded.run_id, "status": recorded.status, "inputs": inputs, "outputs": {}, "metrics": {}, "error": {"code": error_code, "message": error_message}, "writeback": []}
 
 
 def _resolve_package_path(package_path: str) -> Path:
     path = Path(package_path)
-    if path.is_absolute():
-        return path
-    return (settings.project_root / path).resolve()
+    return path if path.is_absolute() else (settings.project_root / path).resolve()
 
 
 def _map_plugin_status(status: str) -> str:
@@ -268,19 +191,20 @@ def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dic
         binding_type = str(binding.get("binding_type", "single")).lower()
         try:
             if binding_type == "batch":
-                source_tags = _normalize_tags(binding.get("source_tags"))
-                if not source_tags:
-                    raise PluginExecutionError(f"batch input binding has no source tags: {input_name}")
-                values_by_tag = connector.read_tags(source_tags)
                 output_format = str(binding.get("output_format", "named-map")).lower()
+                source_mappings = _normalize_source_mappings(binding.get("source_mappings"))
+                source_tags = _normalize_tags(binding.get("source_tags"))
+                read_tags = [item["tag"] for item in source_mappings] if source_mappings else source_tags
+                if not read_tags:
+                    raise PluginExecutionError(f"batch input binding has no source tags: {input_name}")
+                values_by_tag = connector.read_tags(read_tags)
                 if output_format == "ordered-list":
-                    resolved[input_name] = [values_by_tag[tag] for tag in source_tags]
+                    ordered_tags = source_tags or read_tags
+                    resolved[input_name] = [values_by_tag[tag] for tag in ordered_tags]
                 elif output_format == "named-map":
-                    resolved[input_name] = {tag: values_by_tag[tag] for tag in source_tags}
+                    resolved[input_name] = ({item["key"]: values_by_tag[item["tag"]] for item in source_mappings} if source_mappings else {tag: values_by_tag[tag] for tag in read_tags})
                 else:
-                    raise PluginExecutionError(
-                        f"unsupported batch input output_format for {input_name}: {output_format}"
-                    )
+                    raise PluginExecutionError(f"unsupported batch input output_format for {input_name}: {output_format}")
                 continue
 
             source_tag = str(binding.get("source_tag", "")).strip()
@@ -292,13 +216,7 @@ def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dic
     return resolved
 
 
-def _apply_output_bindings(
-    *,
-    run_id: str,
-    outputs: dict[str, Any],
-    instance: dict[str, Any],
-    store: MetadataStore,
-) -> list[dict[str, Any]]:
+def _apply_output_bindings(*, run_id: str, outputs: dict[str, Any], instance: dict[str, Any], store: MetadataStore) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for binding in instance["output_bindings"]:
         output_name = binding["output_name"]
@@ -307,99 +225,33 @@ def _apply_output_bindings(
         binding_type = str(binding.get("binding_type", "single")).lower()
 
         if binding_type == "batch":
-            results.extend(
-                _apply_batch_output_binding(
-                    run_id=run_id,
-                    outputs=outputs,
-                    instance=instance,
-                    store=store,
-                    output_name=output_name,
-                    data_source_id=data_source_id,
-                    target_tags=_normalize_tags(binding.get("target_tags")),
-                    dry_run=dry_run,
-                )
-            )
+            results.extend(_apply_batch_output_binding(run_id=run_id, outputs=outputs, instance=instance, store=store, output_name=output_name, data_source_id=data_source_id, target_tags=_normalize_tags(binding.get("target_tags")), dry_run=dry_run))
             continue
 
         target_tag = str(binding.get("target_tag", "")).strip()
         value = outputs.get(output_name)
 
         if output_name not in outputs:
-            result = _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=None,
-                status="blocked",
-                reason="output_missing",
-                dry_run=dry_run,
-            )
-            results.append(result)
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="output_missing", dry_run=dry_run))
             continue
 
         if not target_tag:
-            result = _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag="*",
-                value=value,
-                status="blocked",
-                reason="target_tag_empty",
-                dry_run=dry_run,
-            )
-            results.append(result)
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag="*", value=value, status="blocked", reason="target_tag_empty", dry_run=dry_run))
             continue
 
         data_source = store.get_data_source(data_source_id)
         if data_source is None:
-            result = _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=value,
-                status="blocked",
-                reason="data_source_not_found",
-                dry_run=dry_run,
-            )
-            results.append(result)
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="blocked", reason="data_source_not_found", dry_run=dry_run))
             continue
 
         try:
             ensure_tag_access(data_source, target_tag, "write")
         except ConnectorError as exc:
-            result = _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=value,
-                status="blocked",
-                reason=str(exc),
-                dry_run=dry_run,
-            )
-            results.append(result)
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="blocked", reason=str(exc), dry_run=dry_run))
             continue
 
         if dry_run or not instance["writeback_enabled"]:
-            result = _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=value,
-                status="dry_run",
-                reason="writeback disabled or dry_run binding",
-                dry_run=True,
-            )
-            results.append(result)
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="dry_run", reason="writeback disabled or dry_run binding", dry_run=True))
             continue
 
         try:
@@ -410,186 +262,73 @@ def _apply_output_bindings(
             status = "failed"
             reason = str(exc)
 
-        results.append(
-            _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=value,
-                status=status,
-                reason=reason,
-                dry_run=False,
-            )
-        )
+        results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status=status, reason=reason, dry_run=False))
     return results
 
 
-def _apply_batch_output_binding(
-    *,
-    run_id: str,
-    outputs: dict[str, Any],
-    instance: dict[str, Any],
-    store: MetadataStore,
-    output_name: str,
-    data_source_id: int,
-    target_tags: list[str],
-    dry_run: bool,
-) -> list[dict[str, Any]]:
+def _apply_batch_output_binding(*, run_id: str, outputs: dict[str, Any], instance: dict[str, Any], store: MetadataStore, output_name: str, data_source_id: int, target_tags: list[str], dry_run: bool) -> list[dict[str, Any]]:
     if not target_tags:
-        return [
-            _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag="*",
-                value=None,
-                status="blocked",
-                reason="target_tags_empty",
-                dry_run=dry_run,
-            )
-        ]
-
+        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag="*", value=None, status="blocked", reason="target_tags_empty", dry_run=dry_run)]
     if output_name not in outputs:
-        return [
-            _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=None,
-                status="blocked",
-                reason="output_missing",
-                dry_run=dry_run,
-            )
-            for target_tag in target_tags
-        ]
-
+        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="output_missing", dry_run=dry_run) for target_tag in target_tags]
     output_value = outputs[output_name]
     if not isinstance(output_value, dict):
-        return [
-            _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=None,
-                status="blocked",
-                reason="batch_output_must_be_object",
-                dry_run=dry_run,
-            )
-            for target_tag in target_tags
-        ]
-
+        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="batch_output_must_be_object", dry_run=dry_run) for target_tag in target_tags]
     data_source = store.get_data_source(data_source_id)
     if data_source is None:
-        return [
-            _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=output_value.get(target_tag),
-                status="blocked",
-                reason="data_source_not_found",
-                dry_run=dry_run,
-            )
-            for target_tag in target_tags
-        ]
+        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=output_value.get(target_tag), status="blocked", reason="data_source_not_found", dry_run=dry_run) for target_tag in target_tags]
 
     results: list[dict[str, Any]] = []
     writable_values: dict[str, Any] = {}
     for target_tag in target_tags:
         if target_tag not in output_value:
-            results.append(
-                _record_writeback_result(
-                    store=store,
-                    run_id=run_id,
-                    output_name=output_name,
-                    data_source_id=data_source_id,
-                    target_tag=target_tag,
-                    value=None,
-                    status="blocked",
-                    reason="target_value_missing",
-                    dry_run=dry_run,
-                )
-            )
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="target_value_missing", dry_run=dry_run))
             continue
-
         value = output_value[target_tag]
         try:
             ensure_tag_access(data_source, target_tag, "write")
         except ConnectorError as exc:
-            results.append(
-                _record_writeback_result(
-                    store=store,
-                    run_id=run_id,
-                    output_name=output_name,
-                    data_source_id=data_source_id,
-                    target_tag=target_tag,
-                    value=value,
-                    status="blocked",
-                    reason=str(exc),
-                    dry_run=dry_run,
-                )
-            )
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="blocked", reason=str(exc), dry_run=dry_run))
             continue
         writable_values[target_tag] = value
 
     if not writable_values:
         return results
-
     if dry_run or not instance["writeback_enabled"]:
         for target_tag, value in writable_values.items():
-            results.append(
-                _record_writeback_result(
-                    store=store,
-                    run_id=run_id,
-                    output_name=output_name,
-                    data_source_id=data_source_id,
-                    target_tag=target_tag,
-                    value=value,
-                    status="dry_run",
-                    reason="writeback disabled or dry_run binding",
-                    dry_run=True,
-                )
-            )
+            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="dry_run", reason="writeback disabled or dry_run binding", dry_run=True))
         return results
 
     try:
         write_results = build_connector(data_source, store).write_tags(writable_values)
-    except Exception as exc:  # noqa: BLE001
-        write_results = {
-            target_tag: {"status": "failed", "value": value, "reason": str(exc)}
-            for target_tag, value in writable_values.items()
-        }
+    except Exception as exc:
+        write_results = {target_tag: {"status": "failed", "value": value, "reason": str(exc)} for target_tag, value in writable_values.items()}
 
     for target_tag, write_result in write_results.items():
-        results.append(
-            _record_writeback_result(
-                store=store,
-                run_id=run_id,
-                output_name=output_name,
-                data_source_id=data_source_id,
-                target_tag=target_tag,
-                value=write_result.get("value"),
-                status=str(write_result.get("status", "failed")),
-                reason=str(write_result.get("reason", "")),
-                dry_run=False,
-            )
-        )
+        results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=write_result.get("value"), status=str(write_result.get("status", "failed")), reason=str(write_result.get("reason", "")), dry_run=False))
     return results
+
+
+def _normalize_source_mappings(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    mappings: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get("tag", "")).strip()
+        key = str(item.get("key", "")).strip()
+        if not tag or not key or key in seen_keys:
+            continue
+        mappings.append({"tag": tag, "key": key})
+        seen_keys.add(key)
+    return mappings
 
 
 def _normalize_tags(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-
     tags: list[str] = []
     seen: set[str] = set()
     for item in value:
@@ -601,34 +340,6 @@ def _normalize_tags(value: Any) -> list[str]:
     return tags
 
 
-def _record_writeback_result(
-    *,
-    store: MetadataStore,
-    run_id: str,
-    output_name: str,
-    data_source_id: int,
-    target_tag: str,
-    value: Any,
-    status: str,
-    reason: str,
-    dry_run: bool,
-) -> dict[str, Any]:
-    store.record_writeback(
-        run_id=run_id,
-        output_name=output_name,
-        data_source_id=data_source_id,
-        target_tag=target_tag,
-        value=value,
-        status=status,
-        reason=reason,
-        dry_run=dry_run,
-    )
-    return {
-        "output_name": output_name,
-        "data_source_id": data_source_id,
-        "target_tag": target_tag,
-        "value": value,
-        "status": status,
-        "reason": reason,
-        "dry_run": dry_run,
-    }
+def _record_writeback_result(*, store: MetadataStore, run_id: str, output_name: str, data_source_id: int, target_tag: str, value: Any, status: str, reason: str, dry_run: bool) -> dict[str, Any]:
+    store.record_writeback(run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status=status, reason=reason, dry_run=dry_run)
+    return {"output_name": output_name, "data_source_id": data_source_id, "target_tag": target_tag, "value": value, "status": status, "reason": reason, "dry_run": dry_run}
