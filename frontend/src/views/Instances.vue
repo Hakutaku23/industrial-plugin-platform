@@ -1,3 +1,4 @@
+
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
@@ -195,12 +196,49 @@ function switchInputBindingType(binding: InputBindingRow, type: BindingType) {
   binding.source_tag = ''
   binding.source_tags = []
   binding.source_mappings = []
+  if (type === 'batch') {
+    binding.output_format = 'named-map'
+    binding.input_name = ''
+    syncManifestSourceMappings(binding)
+  }
 }
 
 function switchOutputBindingType(binding: OutputBindingRow, type: BindingType) {
   binding.binding_type = type
   binding.target_tag = ''
   binding.target_tags = []
+}
+
+function onInputBindingDataSourceChange(binding: InputBindingRow) {
+  binding.source_tag = ''
+  binding.source_tags = []
+  if (isManifestBatchBinding(binding)) {
+    binding.source_mappings = binding.source_mappings.map((item) => ({ ...item, tag: '' }))
+    return
+  }
+  binding.source_mappings = []
+}
+
+function onInputBindingOutputFormatChange(binding: InputBindingRow) {
+  binding.source_tag = ''
+  binding.source_tags = []
+  if (binding.output_format === 'named-map' && !binding.input_name.trim()) {
+    syncManifestSourceMappings(binding)
+    return
+  }
+  binding.source_mappings = []
+}
+
+function onBatchInputNameChange(binding: InputBindingRow) {
+  if (binding.binding_type !== 'batch') return
+  if (binding.output_format !== 'named-map') return
+  binding.source_tag = ''
+  binding.source_tags = []
+  if (!binding.input_name.trim()) {
+    syncManifestSourceMappings(binding)
+    return
+  }
+  binding.source_mappings = []
 }
 
 function inputOptions(binding: InputBindingRow) {
@@ -215,6 +253,37 @@ function outputOptions(binding: OutputBindingRow) {
 
 function sanitizePointKey(tag: string) {
   return tag.trim().replace(/[^A-Za-z0-9_]/g, '_')
+}
+
+function isManifestBatchBinding(binding: InputBindingRow) {
+  return (
+    binding.binding_type === 'batch' &&
+    binding.output_format === 'named-map' &&
+    !binding.input_name.trim() &&
+    manifestInputDefs.value.length > 0
+  )
+}
+
+function syncSourceTagsFromMappings(binding: InputBindingRow) {
+  binding.source_tags = Array.from(
+    new Set(
+      binding.source_mappings
+        .map((item) => item.tag.trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function syncManifestSourceMappings(binding: InputBindingRow) {
+  if (!isManifestBatchBinding(binding)) return
+  const previous = new Map(
+    binding.source_mappings.map((item) => [item.key.trim(), item.tag.trim()]),
+  )
+  binding.source_mappings = manifestInputDefs.value.map((item) => ({
+    key: item.name,
+    tag: previous.get(item.name) ?? '',
+  }))
+  syncSourceTagsFromMappings(binding)
 }
 
 function syncSourceMappings(binding: InputBindingRow) {
@@ -243,6 +312,19 @@ function selectAllInputTags(binding: InputBindingRow) {
 function clearAllInputTags(binding: InputBindingRow) {
   binding.source_tags = []
   binding.source_mappings = []
+}
+
+function clearManifestInputMappings(binding: InputBindingRow) {
+  binding.source_mappings = binding.source_mappings.map((item) => ({ ...item, tag: '' }))
+  binding.source_tags = []
+}
+
+function updateManifestMappingTag(binding: InputBindingRow, key: string, value: string) {
+  const next = value.trim()
+  binding.source_mappings = binding.source_mappings.map((item) =>
+    item.key === key ? { ...item, tag: next } : item,
+  )
+  syncSourceTagsFromMappings(binding)
 }
 
 function moveInputTag(binding: InputBindingRow, index: number, direction: -1 | 1) {
@@ -287,7 +369,9 @@ function manifestInterfaces(kind: 'inputs' | 'outputs'): ManifestInterfaceDef[] 
 }
 
 function ensureRequiredInputBindings() {
-  // 不再自动补齐为单点绑定，避免批量绑定场景下被前端“强制单点”。
+  for (const binding of inputBindings.value) {
+    syncManifestSourceMappings(binding)
+  }
 }
 
 function isRequiredInputName(name: string) {
@@ -588,7 +672,7 @@ function normalizeSourceMappings(value: unknown, sourceTags: string[]) {
     ? value
         .filter((item): item is Record<string, unknown> => isRecord(item))
         .map((item) => ({ tag: stringValue(item.tag), key: stringValue(item.key) }))
-        .filter((item) => item.tag && item.key)
+        .filter((item) => item.tag || item.key)
     : []
   return mappings.length > 0 ? mappings : sourceTags.map((tag) => ({ tag, key: sanitizePointKey(tag) }))
 }
@@ -755,7 +839,7 @@ onUnmounted(() => {
       <div>
         <p class="eyebrow">Instances</p>
         <h2>运行实例</h2>
-        <p>实例绑定直接参考 manifest。批量 named-map 在输入名留空时，会按映射键展开为多个插件输入，并走一次批量读取。</p>
+        <p>保留单点绑定；批量 named-map 支持按 manifest 输入名逐项列出映射目标，再为每个输入选择对应的 Redis 位点。</p>
       </div>
       <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
         {{ loading ? '刷新中' : '刷新' }}
@@ -863,20 +947,26 @@ onUnmounted(() => {
             </label>
             <label>
               <span>插件输入名</span>
-              <select v-if="manifestInputDefs.length > 0" v-model="binding.input_name">
-                <option value="">请选择 manifest 输入</option>
+              <select
+                v-if="manifestInputDefs.length > 0"
+                v-model="binding.input_name"
+                @change="onBatchInputNameChange(binding)"
+              >
+                <option :value="''">
+                  {{ binding.binding_type === 'batch' ? '按 manifest 输入列表逐项映射' : '请选择 manifest 输入' }}
+                </option>
                 <option v-for="item in manifestInputDefs" :key="item.name" :value="item.name">
                   {{ item.required ? `${item.name} *` : item.name }}
                 </option>
               </select>
               <input v-else v-model="binding.input_name" placeholder="如 value、inputs" />
               <small v-if="binding.binding_type === 'batch' && binding.output_format === 'named-map'" class="muted small-note">
-                留空则按下方 named-map 键名展开为多个 manifest 输入，并通过一次批量读取完成绑定。
+                输入名留空时，批量模式会直接列出 manifest 输入名，并为每个输入单独选择 Redis 位点。
               </small>
             </label>
             <label>
               <span>数据源</span>
-              <select v-model="binding.data_source_id" @change="binding.source_tag = ''; binding.source_tags = []; binding.source_mappings = []">
+              <select v-model="binding.data_source_id" @change="onInputBindingDataSourceChange(binding)">
                 <option value="">请选择数据源</option>
                 <option v-for="source in dataSources" :key="source.id" :value="String(source.id)">
                   {{ source.name }}
@@ -907,59 +997,96 @@ onUnmounted(() => {
             <div class="binding-basic-grid">
               <label>
                 <span>批量输出格式</span>
-                <select v-model="binding.output_format">
+                <select v-model="binding.output_format" @change="onInputBindingOutputFormatChange(binding)">
                   <option value="named-map">named-map</option>
                   <option value="ordered-list">ordered-list</option>
                 </select>
               </label>
-              <div class="binding-actions-inline">
+              <div v-if="isManifestBatchBinding(binding)" class="binding-actions-inline">
+                <button type="button" class="secondary-button" @click="clearManifestInputMappings(binding)">清空映射</button>
+                <span class="muted">按 manifest 输入名逐项选择 Redis 位点</span>
+              </div>
+              <div v-else class="binding-actions-inline">
                 <button type="button" class="secondary-button" @click="selectAllInputTags(binding)">全选位点</button>
                 <button type="button" class="secondary-button" @click="clearAllInputTags(binding)">清空</button>
                 <span class="muted">已选 {{ binding.source_tags.length }} 个</span>
               </div>
             </div>
 
-            <div v-if="inputOptions(binding).length > 0" class="point-picker-grid">
-              <label v-for="point in inputOptions(binding)" :key="point.tag" class="point-check">
-                <input
-                  type="checkbox"
-                  :checked="binding.source_tags.includes(point.tag)"
-                  @change="updateInputTagSelection(binding, point.tag, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ point.label }}</span>
-              </label>
-            </div>
-            <div v-else class="empty-inline">当前数据源未配置可读位点。</div>
-
-            <div v-if="binding.output_format === 'named-map' && binding.source_mappings.length > 0" class="mapping-table">
-              <div class="mapping-head">
-                <strong>named-map 映射</strong>
-                <span class="muted">输入名留空时，这里的键名会直接作为 manifest 输入名</span>
-              </div>
-              <div v-for="item in binding.source_mappings" :key="item.tag" class="mapping-row">
-                <div class="mapping-tag">{{ item.tag }}</div>
-                <input
-                  class="mapping-input"
-                  :value="item.key"
-                  @input="updateMappingKey(binding, item.tag, ($event.target as HTMLInputElement).value)"
-                  placeholder="如 input_014"
-                />
-              </div>
-            </div>
-
-            <div v-if="binding.output_format === 'ordered-list' && binding.source_tags.length > 0" class="mapping-table">
-              <div class="mapping-head">
-                <strong>ordered-list 顺序</strong>
-                <span class="muted">插件收到的列表值将严格按这里的顺序排列</span>
-              </div>
-              <div v-for="(tag, orderIndex) in binding.source_tags" :key="tag" class="mapping-row order-row">
-                <div class="mapping-tag">#{{ orderIndex + 1 }} · {{ tag }}</div>
-                <div class="order-actions">
-                  <button type="button" class="secondary-button small-button" @click="moveInputTag(binding, orderIndex, -1)">上移</button>
-                  <button type="button" class="secondary-button small-button" @click="moveInputTag(binding, orderIndex, 1)">下移</button>
+            <template v-if="isManifestBatchBinding(binding)">
+              <div class="mapping-table">
+                <div class="mapping-head">
+                  <strong>批量映射目标</strong>
+                  <span class="muted">左侧固定为 manifest 输入名；右侧选择对应 Redis 位点</span>
+                </div>
+                <div v-for="item in binding.source_mappings" :key="item.key" class="mapping-row manifest-target-row">
+                  <div class="mapping-target">
+                    <span class="mapping-key">{{ item.key }}</span>
+                    <span v-if="isRequiredInputName(item.key)" class="required-badge">必填</span>
+                  </div>
+                  <div class="mapping-target-inputs">
+                    <select
+                      :value="item.tag"
+                      @change="updateManifestMappingTag(binding, item.key, ($event.target as HTMLSelectElement).value)"
+                    >
+                      <option value="">请选择可读位点</option>
+                      <option v-for="point in inputOptions(binding)" :key="point.tag" :value="point.tag">
+                        {{ point.label }}
+                      </option>
+                    </select>
+                    <input
+                      :value="item.tag"
+                      @input="updateManifestMappingTag(binding, item.key, ($event.target as HTMLInputElement).value)"
+                      placeholder="如 sthb:DCS_AO_RTO_014_AI"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            </template>
+
+            <template v-else>
+              <div v-if="inputOptions(binding).length > 0" class="point-picker-grid">
+                <label v-for="point in inputOptions(binding)" :key="point.tag" class="point-check">
+                  <input
+                    type="checkbox"
+                    :checked="binding.source_tags.includes(point.tag)"
+                    @change="updateInputTagSelection(binding, point.tag, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ point.label }}</span>
+                </label>
+              </div>
+              <div v-else class="empty-inline">当前数据源未配置可读位点。</div>
+
+              <div v-if="binding.output_format === 'named-map' && binding.source_mappings.length > 0" class="mapping-table">
+                <div class="mapping-head">
+                  <strong>named-map 映射</strong>
+                  <span class="muted">输入名留空时，这里的键名会直接作为 manifest 输入名</span>
+                </div>
+                <div v-for="item in binding.source_mappings" :key="item.tag" class="mapping-row">
+                  <div class="mapping-tag">{{ item.tag }}</div>
+                  <input
+                    class="mapping-input"
+                    :value="item.key"
+                    @input="updateMappingKey(binding, item.tag, ($event.target as HTMLInputElement).value)"
+                    placeholder="如 input_014"
+                  />
+                </div>
+              </div>
+
+              <div v-if="binding.output_format === 'ordered-list' && binding.source_tags.length > 0" class="mapping-table">
+                <div class="mapping-head">
+                  <strong>ordered-list 顺序</strong>
+                  <span class="muted">插件收到的列表值将严格按这里的顺序排列</span>
+                </div>
+                <div v-for="(tag, orderIndex) in binding.source_tags" :key="tag" class="mapping-row order-row">
+                  <div class="mapping-tag">#{{ orderIndex + 1 }} · {{ tag }}</div>
+                  <div class="order-actions">
+                    <button type="button" class="secondary-button small-button" @click="moveInputTag(binding, orderIndex, -1)">上移</button>
+                    <button type="button" class="secondary-button small-button" @click="moveInputTag(binding, orderIndex, 1)">下移</button>
+                  </div>
+                </div>
+              </div>
+            </template>
           </template>
         </div>
       </div>
@@ -1147,7 +1274,7 @@ onUnmounted(() => {
 .binding-title-line { display: flex; align-items: center; gap: 8px; }
 .binding-basic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .binding-basic-grid label, .binding-single-grid label, .json-input { display: grid; gap: 8px; color: #2f403d; font-weight: 600; }
-.binding-basic-grid input, .binding-basic-grid select, .binding-single-grid input, .binding-single-grid select, .mapping-input, .json-input textarea { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; }
+.binding-basic-grid input, .binding-basic-grid select, .binding-single-grid input, .binding-single-grid select, .mapping-input, .json-input textarea, .mapping-target-inputs input, .mapping-target-inputs select { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; }
 .binding-single-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .point-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .point-check { display: flex !important; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #d8e3df; border-radius: 8px; background: #ffffff; font-weight: 500; }
@@ -1157,6 +1284,10 @@ onUnmounted(() => {
 .mapping-table, .run-history-item, .package-row, .status-grid > div, .manifest-block { display: grid; gap: 10px; padding: 12px; border: 1px solid #d8e3df; border-radius: 8px; background: #ffffff; }
 .mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 0.9fr); gap: 12px; align-items: center; }
 .mapping-tag { padding: 10px 12px; border: 1px solid #d8e3df; border-radius: 6px; background: #f5f8f7; overflow-wrap: anywhere; }
+.mapping-target { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #d8e3df; border-radius: 6px; background: #f5f8f7; overflow-wrap: anywhere; }
+.mapping-key { font-weight: 700; }
+.mapping-target-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.manifest-target-row { grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.4fr); }
 .order-row { grid-template-columns: minmax(0, 1fr) auto; }
 .order-actions { display: flex; gap: 8px; }
 .small-button { min-height: 34px; padding: 0 12px; }
@@ -1170,6 +1301,6 @@ onUnmounted(() => {
 .error-inline { margin: 0; color: #b65353; font-size: 13px; font-weight: 700; }
 pre { white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 980px) {
-  .instance-form, .binding-basic-grid, .binding-single-grid, .point-picker-grid, .mapping-row, .order-row, .status-grid, .manifest-summary { grid-template-columns: 1fr; }
+  .instance-form, .binding-basic-grid, .binding-single-grid, .point-picker-grid, .mapping-row, .order-row, .status-grid, .manifest-summary, .mapping-target-inputs, .manifest-target-row { grid-template-columns: 1fr; }
 }
 </style>

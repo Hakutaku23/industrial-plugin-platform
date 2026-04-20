@@ -1,0 +1,38 @@
+apiVersion: plugin.platform/v1
+kind: PluginPackage
+metadata:
+  name: no-input-output-plugin
+  displayName: No Input Output Plugin
+  version: 0.1.0
+  author: Dev
+  description: Minimal plugin that returns a fixed output for local upload tests.
+  tags:
+    - demo
+    - python
+spec:
+  pluginType: python
+  packageFormat: zip
+  entry:
+    mode: function
+    file: runtime/main.py
+    callable: run
+  runtime:
+    pythonVersion: "3.12"
+    workingDir: "."
+    timeoutSec: 20
+    memoryMB: 256
+    cpuLimit: 1
+  schedule:
+    type: manual
+  inputs: []
+  outputs:
+    - name: test_value
+      type: number
+      writable: true
+  permissions:
+    network: false
+    filesystem: scoped
+    writeback: false
+compatibility:
+  platformApi: ">=0.1.0"
+  runnerApi: ">=0.1.0"

@@ -5,11 +5,22 @@ from fastapi import FastAPI
 
 from platform_api.api.routes import router
 from platform_api.core.config import settings
+from platform_api.middleware import configure_middlewares
 from platform_api.services.scheduler import scheduler
+from platform_api.security import make_password_hash
+from platform_api.services.security_store import SecurityStore
+from platform_api.ui import mount_spa
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    if settings.security.enabled and settings.security.bootstrap_admin_username and settings.security.bootstrap_admin_password:
+        SecurityStore(settings.metadata_database).ensure_bootstrap_admin(
+            username=settings.security.bootstrap_admin_username,
+            display_name=settings.security.bootstrap_admin_display_name,
+            email=settings.security.bootstrap_admin_email,
+            password_hash=make_password_hash(settings.security.bootstrap_admin_password),
+        )
     if settings.scheduler.enabled:
         scheduler.start()
     try:
@@ -21,12 +32,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Industrial Plugin Platform API",
-        version="0.1.0",
-        description="Control plane API for plugin package intake and execution metadata.",
+        title='Industrial Plugin Platform API',
+        version='0.2.0',
+        description='Control plane API for plugin package intake, execution, and administration.',
         lifespan=lifespan,
     )
+    configure_middlewares(app)
     app.include_router(router)
+    mount_spa(app)
     return app
 
 

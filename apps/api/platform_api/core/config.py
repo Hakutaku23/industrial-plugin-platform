@@ -143,6 +143,28 @@ class ConnectorSettings(BaseModel):
     redis: RedisDefaults = Field(default_factory=RedisDefaults)
 
 
+class SecuritySettings(BaseModel):
+    enabled: bool = False
+    session_cookie_name: str = 'ipp_session'
+    session_cookie_secure: bool = False
+    session_cookie_samesite: str = 'lax'
+    session_ttl_sec: int = 12 * 60 * 60
+    password_iterations: int = 390000
+    trusted_hosts: list[str] = Field(default_factory=list)
+    https_redirect: bool = False
+    max_request_body_bytes: int = 20 * 1024 * 1024
+    bootstrap_admin_username: str | None = None
+    bootstrap_admin_password: str | None = None
+    bootstrap_admin_display_name: str = 'Platform Administrator'
+    bootstrap_admin_email: str | None = None
+
+
+class UISettings(BaseModel):
+    serve_dist: bool = True
+    dist_dir: Path = Path('frontend/dist')
+    index_file: str = 'index.html'
+
+
 class Settings(BaseModel):
     project_root: Path
     app: AppSettings = Field(default_factory=AppSettings)
@@ -152,6 +174,8 @@ class Settings(BaseModel):
     runner: RunnerSettings = Field(default_factory=RunnerSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     connectors: ConnectorSettings = Field(default_factory=ConnectorSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
+    ui: UISettings = Field(default_factory=UISettings)
 
     @property
     def package_storage_dir(self) -> Path:
@@ -232,6 +256,18 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ('PLATFORM_RUNNER_DEFAULT_TIMEOUT_SEC', ('runner', 'default_timeout_sec'), _env_int('PLATFORM_RUNNER_DEFAULT_TIMEOUT_SEC')),
         ('PLATFORM_RUNNER_MAX_TIMEOUT_SEC', ('runner', 'max_timeout_sec'), _env_int('PLATFORM_RUNNER_MAX_TIMEOUT_SEC')),
         ('PLATFORM_LOG_LEVEL', ('logging', 'level'), _env_str('PLATFORM_LOG_LEVEL')),
+        ('PLATFORM_SECURITY_ENABLED', ('security', 'enabled'), _env_bool('PLATFORM_SECURITY_ENABLED')),
+        ('PLATFORM_SECURITY_TRUSTED_HOSTS', ('security', 'trusted_hosts'), [item.strip() for item in (_env_str('PLATFORM_SECURITY_TRUSTED_HOSTS') or '').split(',') if item.strip()] or None),
+        ('PLATFORM_SECURITY_HTTPS_REDIRECT', ('security', 'https_redirect'), _env_bool('PLATFORM_SECURITY_HTTPS_REDIRECT')),
+        ('PLATFORM_SECURITY_MAX_REQUEST_BODY_BYTES', ('security', 'max_request_body_bytes'), _env_int('PLATFORM_SECURITY_MAX_REQUEST_BODY_BYTES')),
+        ('PLATFORM_SECURITY_SESSION_TTL_SEC', ('security', 'session_ttl_sec'), _env_int('PLATFORM_SECURITY_SESSION_TTL_SEC')),
+        ('PLATFORM_SECURITY_SESSION_COOKIE_NAME', ('security', 'session_cookie_name'), _env_str('PLATFORM_SECURITY_SESSION_COOKIE_NAME')),
+        ('PLATFORM_SECURITY_SESSION_COOKIE_SECURE', ('security', 'session_cookie_secure'), _env_bool('PLATFORM_SECURITY_SESSION_COOKIE_SECURE')),
+        ('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_USERNAME', ('security', 'bootstrap_admin_username'), _env_str('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_USERNAME')),
+        ('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_PASSWORD', ('security', 'bootstrap_admin_password'), _env_str('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_PASSWORD')),
+        ('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_EMAIL', ('security', 'bootstrap_admin_email'), _env_str('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_EMAIL')),
+        ('PLATFORM_UI_SERVE_DIST', ('ui', 'serve_dist'), _env_bool('PLATFORM_UI_SERVE_DIST')),
+        ('PLATFORM_UI_DIST_DIR', ('ui', 'dist_dir'), _env_str('PLATFORM_UI_DIST_DIR')),
     ]
     for _name, path, value in mapping:
         if value is not None:
@@ -256,6 +292,9 @@ def _resolve_path_fields(project_root: Path, payload: dict[str, Any]) -> dict[st
 
     runner = result.setdefault('runner', {})
     runner['work_root'] = str(_resolve_path(project_root, runner.get('work_root', 'var/runs')))
+
+    ui = result.setdefault('ui', {})
+    ui['dist_dir'] = str(_resolve_path(project_root, ui.get('dist_dir', 'frontend/dist')))
     return result
 
 

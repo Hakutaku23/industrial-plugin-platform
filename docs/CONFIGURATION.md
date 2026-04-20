@@ -29,7 +29,24 @@ metadata:
 scheduler:
   enabled: true
   poll_interval_sec: 1.0
+
+security:
+  enabled: true
+  session_cookie_name: ipp_session
+  session_cookie_secure: false
+  session_cookie_samesite: lax
+  session_ttl_sec: 43200
+  bootstrap_admin_username: admin
+  bootstrap_admin_password: "admin123456"
 ```
+
+开发模式也默认启用登录。登录成功后，后端写入 `HttpOnly` Session
+Cookie，前端不应把 Token 写入 `localStorage`、`sessionStorage` 或页面状态中。
+首次启动时会按 `bootstrap_admin_username` /
+`bootstrap_admin_password` 创建或更新本地管理员账号。上线环境应通过
+`PLATFORM_SECURITY_BOOTSTRAP_ADMIN_USERNAME` 和
+`PLATFORM_SECURITY_BOOTSTRAP_ADMIN_PASSWORD` 覆盖默认账号，并启用 HTTPS 后将
+`session_cookie_secure` 设置为 `true`。
 
 上线使用 PostgreSQL 时，可以在部署环境中设置：
 

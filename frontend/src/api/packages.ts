@@ -1,3 +1,5 @@
+import { apiFetch } from './client'
+
 export interface UploadPackageResult {
   package_id: number
   version_id: number
@@ -168,49 +170,29 @@ export interface RunPluginResult {
 }
 
 export async function uploadPackage(file: File): Promise<UploadPackageResult> {
-  const response = await fetch(`/api/v1/packages?filename=${encodeURIComponent(file.name)}`, {
+  return apiFetch<UploadPackageResult>(`/api/v1/packages?filename=${encodeURIComponent(file.name)}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
     },
     body: await file.arrayBuffer(),
   })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(errorText || '插件包上传失败')
-  }
-
-  return response.json()
 }
 
 export async function listPackages(): Promise<PluginPackageSummary[]> {
-  const response = await fetch('/api/v1/packages')
-  if (!response.ok) {
-    throw new Error((await response.text()) || '插件包列表加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: PluginPackageSummary[] }>('/api/v1/packages')
   return payload.items
 }
 
 export async function listPackageVersions(packageName: string): Promise<PluginVersionRecord[]> {
-  const response = await fetch(`/api/v1/packages/${encodeURIComponent(packageName)}/versions`)
-  if (!response.ok) {
-    throw new Error((await response.text()) || '插件版本加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: PluginVersionRecord[] }>(`/api/v1/packages/${encodeURIComponent(packageName)}/versions`)
   return payload.items
 }
 
 export async function deletePackage(packageName: string): Promise<void> {
-  const response = await fetch(`/api/v1/packages/${encodeURIComponent(packageName)}`, {
+  await apiFetch(`/api/v1/packages/${encodeURIComponent(packageName)}`, {
     method: 'DELETE',
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '插件包删除失败')
-  }
 }
 
 export async function runPackageVersion(
@@ -219,7 +201,7 @@ export async function runPackageVersion(
   inputs: Record<string, unknown>,
   config: Record<string, unknown> = {},
 ): Promise<RunPluginResult> {
-  const response = await fetch(
+  return apiFetch<RunPluginResult>(
     `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(version)}/runs`,
     {
       method: 'POST',
@@ -229,59 +211,30 @@ export async function runPackageVersion(
       body: JSON.stringify({ inputs, config }),
     },
   )
-  if (!response.ok) {
-    throw new Error((await response.text()) || '插件执行失败')
-  }
-
-  return response.json()
 }
 
 export async function listRuns(packageName?: string, instanceId?: number): Promise<PluginRunRecord[]> {
   const params = new URLSearchParams()
-  if (packageName) {
-    params.set('package_name', packageName)
-  }
-  if (instanceId !== undefined) {
-    params.set('instance_id', String(instanceId))
-  }
+  if (packageName) params.set('package_name', packageName)
+  if (instanceId !== undefined) params.set('instance_id', String(instanceId))
   const query = params.toString() ? `?${params.toString()}` : ''
-  const response = await fetch(`/api/v1/runs${query}`)
-  if (!response.ok) {
-    throw new Error((await response.text()) || '运行记录加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: PluginRunRecord[] }>(`/api/v1/runs${query}`)
   return payload.items
 }
 
 export async function listRunLogs(runId: string): Promise<RunLogRecord[]> {
-  const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}/logs`)
-  if (!response.ok) {
-    throw new Error((await response.text()) || '运行日志加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: RunLogRecord[] }>(`/api/v1/runs/${encodeURIComponent(runId)}/logs`)
   return payload.items
 }
 
 export async function listWritebackRecords(runId?: string): Promise<WritebackRecord[]> {
   const query = runId ? `?run_id=${encodeURIComponent(runId)}` : ''
-  const response = await fetch(`/api/v1/writeback-records${query}`)
-  if (!response.ok) {
-    throw new Error((await response.text()) || '写回记录加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: WritebackRecord[] }>(`/api/v1/writeback-records${query}`)
   return payload.items
 }
 
 export async function listDataSources(): Promise<DataSourceRecord[]> {
-  const response = await fetch('/api/v1/data-sources')
-  if (!response.ok) {
-    throw new Error((await response.text()) || '数据源列表加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: DataSourceRecord[] }>('/api/v1/data-sources')
   return payload.items
 }
 
@@ -292,34 +245,21 @@ export async function saveDataSource(payload: {
   read_enabled: boolean
   write_enabled: boolean
 }): Promise<{ id: number; name: string; connector_type: string; status: string }> {
-  const response = await fetch('/api/v1/data-sources', {
+  return apiFetch('/api/v1/data-sources', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '数据源保存失败')
-  }
-
-  return response.json()
 }
 
 export async function deleteDataSource(dataSourceId: number): Promise<void> {
-  const response = await fetch(`/api/v1/data-sources/${dataSourceId}`, {
+  await apiFetch(`/api/v1/data-sources/${dataSourceId}`, {
     method: 'DELETE',
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '数据源删除失败')
-  }
 }
 
 export async function listInstances(): Promise<PluginInstanceRecord[]> {
-  const response = await fetch('/api/v1/instances')
-  if (!response.ok) {
-    throw new Error((await response.text()) || '实例列表加载失败')
-  }
-
-  const payload = await response.json()
+  const payload = await apiFetch<{ items: PluginInstanceRecord[] }>('/api/v1/instances')
   return payload.items
 }
 
@@ -336,50 +276,32 @@ export async function saveInstance(payload: {
   schedule_interval_sec: number
 }): Promise<{ id: number; name: string; status: string }> {
   const endpoint = payload.id ? `/api/v1/instances/${payload.id}` : '/api/v1/instances'
-  const response = await fetch(endpoint, {
+  return apiFetch(endpoint, {
     method: payload.id ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '实例保存失败')
-  }
-
-  return response.json()
 }
 
 export async function updateInstanceSchedule(
   instanceId: number,
   payload: { enabled: boolean; interval_sec?: number },
 ): Promise<PluginInstanceRecord> {
-  const response = await fetch(`/api/v1/instances/${instanceId}/schedule`, {
+  return apiFetch<PluginInstanceRecord>(`/api/v1/instances/${instanceId}/schedule`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '实例定时状态更新失败')
-  }
-
-  return response.json()
 }
 
 export async function deleteInstance(instanceId: number): Promise<void> {
-  const response = await fetch(`/api/v1/instances/${instanceId}`, {
+  await apiFetch(`/api/v1/instances/${instanceId}`, {
     method: 'DELETE',
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '实例删除失败')
-  }
 }
 
 export async function runInstance(instanceId: number): Promise<RunPluginResult> {
-  const response = await fetch(`/api/v1/instances/${instanceId}/runs`, {
+  return apiFetch<RunPluginResult>(`/api/v1/instances/${instanceId}/runs`, {
     method: 'POST',
   })
-  if (!response.ok) {
-    throw new Error((await response.text()) || '实例运行失败')
-  }
-
-  return response.json()
 }
