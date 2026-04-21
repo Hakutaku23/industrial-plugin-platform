@@ -8,6 +8,7 @@ import Login from '../views/Login.vue'
 import PluginList from '../views/PluginList.vue'
 import PluginUpload from '../views/PluginUpload.vue'
 import RunList from '../views/RunList.vue'
+import UserProfile from '../views/UserProfile.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -53,6 +54,11 @@ export const router = createRouter({
       name: 'admin-users',
       component: AdminUsers,
       meta: { permission: 'user.read' },
+    },
+    {
+      path: '/profile',
+      name: 'profile',
+      component: UserProfile,
     },
   ],
 })

@@ -14,9 +14,19 @@ export interface AuthMeResponse {
     username: string
     display_name: string
     email: string | null
+    avatar_url: string | null
     roles: string[]
     permissions: string[]
   }
+}
+
+export interface PermissionRecord {
+  id: number
+  code: string
+  description: string
+  module: string
+  created_at: string
+  updated_at: string
 }
 
 export interface RoleRecord {
@@ -32,6 +42,7 @@ export interface UserRecord {
   username: string
   display_name: string
   email: string | null
+  avatar_url: string | null
   status: string
   auth_source: string
   last_login_at: string | null
@@ -47,6 +58,24 @@ export async function getSecurityStatus(): Promise<SecurityStatus> {
 
 export async function getMe(): Promise<AuthMeResponse> {
   return apiFetch<AuthMeResponse>('/api/v1/auth/me')
+}
+
+export async function getMyPermissionMatrix(): Promise<{ owned: PermissionRecord[]; missing: PermissionRecord[]; all: PermissionRecord[] }> {
+  return apiFetch('/api/v1/auth/me/permissions')
+}
+
+export async function updateMyProfile(payload: {
+  display_name?: string
+  email?: string | null
+  avatar_url?: string | null
+  current_password?: string
+  new_password?: string
+}): Promise<UserRecord> {
+  return apiFetch<UserRecord>('/api/v1/auth/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function login(username: string, password: string): Promise<{ ok: boolean }> {

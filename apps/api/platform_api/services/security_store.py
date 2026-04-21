@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, select
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -72,6 +72,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
     ],
 }
 
+_UNSET = object()
+
 
 class Base(DeclarativeBase):
     pass
@@ -84,6 +86,7 @@ class UserModel(Base):
     username: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default='active')
     auth_source: Mapped[str] = mapped_column(String(40), nullable=False, default='local')
@@ -162,6 +165,7 @@ class SessionUser:
     username: str
     display_name: str
     email: str | None
+    avatar_url: str | None
     status: str
     roles: list[str]
     permissions: list[str]
@@ -183,7 +187,18 @@ class SecurityStore:
 
     def initialize(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._ensure_schema()
         self._seed_system_security()
+
+    def _ensure_schema(self) -> None:
+        inspector = inspect(self.engine)
+        try:
+            user_columns = {column['name'] for column in inspector.get_columns('security_users')}
+        except Exception:
+            return
+        if 'avatar_url' not in user_columns:
+            with self.engine.begin() as connection:
+                connection.exec_driver_sql('ALTER TABLE security_users ADD COLUMN avatar_url VARCHAR(500)')
 
     def _seed_system_security(self) -> None:
         now = datetime.now(UTC)
@@ -254,6 +269,7 @@ class SecurityStore:
                     username=username,
                     display_name=display_name,
                     email=email,
+                    avatar_url=None,
                     password_hash=password_hash,
                     status='active',
                     auth_source='local',
@@ -285,7 +301,6 @@ class SecurityStore:
             user = session.scalar(select(UserModel).where(UserModel.username == username))
             return self._serialize_user(user) if user else None
 
-
     def get_auth_user(self, username: str) -> dict[str, Any] | None:
         self.initialize()
         with self.session_factory() as session:
@@ -308,6 +323,22 @@ class SecurityStore:
         with self.session_factory() as session:
             rows = session.scalars(select(RoleModel).order_by(RoleModel.name)).all()
             return [self._serialize_role(session, row) for row in rows]
+
+    def list_permissions(self) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.session_factory() as session:
+            rows = session.scalars(select(PermissionModel).order_by(PermissionModel.module, PermissionModel.code)).all()
+            return [
+                {
+                    'id': row.id,
+                    'code': row.code,
+                    'description': row.description,
+                    'module': row.module,
+                    'created_at': row.created_at.isoformat(),
+                    'updated_at': row.updated_at.isoformat(),
+                }
+                for row in rows
+            ]
 
     def list_users(self) -> list[dict[str, Any]]:
         self.initialize()
@@ -335,6 +366,7 @@ class SecurityStore:
                 username=username,
                 display_name=display_name,
                 email=email,
+                avatar_url=None,
                 password_hash=password_hash,
                 status='active',
                 auth_source='local',
@@ -351,24 +383,27 @@ class SecurityStore:
         self,
         *,
         user_id: int,
-        display_name: str | None = None,
-        email: str | None = None,
-        password_hash: str | None = None,
-        status: str | None = None,
+        display_name: str | object = _UNSET,
+        email: str | None | object = _UNSET,
+        avatar_url: str | None | object = _UNSET,
+        password_hash: str | object = _UNSET,
+        status: str | object = _UNSET,
     ) -> dict[str, Any] | None:
         self.initialize()
         with self.session_factory() as session:
             user = session.get(UserModel, user_id)
             if user is None:
                 return None
-            if display_name is not None:
-                user.display_name = display_name
-            if email is not None:
-                user.email = email
-            if password_hash is not None:
-                user.password_hash = password_hash
-            if status is not None:
-                user.status = status
+            if display_name is not _UNSET:
+                user.display_name = str(display_name)
+            if email is not _UNSET:
+                user.email = email if isinstance(email, str) or email is None else user.email
+            if avatar_url is not _UNSET:
+                user.avatar_url = avatar_url if isinstance(avatar_url, str) or avatar_url is None else user.avatar_url
+            if password_hash is not _UNSET:
+                user.password_hash = str(password_hash)
+            if status is not _UNSET:
+                user.status = str(status)
             user.updated_at = datetime.now(UTC)
             session.commit()
             return self._serialize_user(session.get(UserModel, user.id))
@@ -439,6 +474,7 @@ class SecurityStore:
                 username=user.username,
                 display_name=user.display_name,
                 email=user.email,
+                avatar_url=user.avatar_url,
                 status=user.status,
                 roles=roles,
                 permissions=permissions,
@@ -464,7 +500,7 @@ class SecurityStore:
             session.commit()
 
     def _normalize_roles(self, roles: list[str]) -> list[str]:
-        normalized = []
+        normalized: list[str] = []
         seen: set[str] = set()
         for role in roles:
             name = str(role).strip().lower()
@@ -474,6 +510,8 @@ class SecurityStore:
             normalized.append(name)
         if not normalized:
             normalized.append('viewer')
+        if len(normalized) > 1:
+            raise ValueError('each user can only have one role')
         return normalized
 
     def _replace_user_roles(self, session, user_id: int, roles: list[str]) -> None:
@@ -491,7 +529,7 @@ class SecurityStore:
 
     def _roles_for_user(self, session, user_id: int) -> list[str]:
         rows = session.scalars(select(UserRoleModel).where(UserRoleModel.user_id == user_id)).all()
-        names = []
+        names: list[str] = []
         for row in rows:
             role = session.get(RoleModel, row.role_id)
             if role is not None:
@@ -522,6 +560,7 @@ class SecurityStore:
                 'username': user_row.username,
                 'display_name': user_row.display_name,
                 'email': user_row.email,
+                'avatar_url': user_row.avatar_url,
                 'status': user_row.status,
                 'auth_source': user_row.auth_source,
                 'last_login_at': user_row.last_login_at.isoformat() if user_row.last_login_at else None,

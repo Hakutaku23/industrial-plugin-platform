@@ -15,10 +15,16 @@
       </nav>
       <div class="user-block">
         <template v-if="auth.securityEnabled && auth.user">
-          <div class="user-meta">
-            <strong>{{ auth.user.display_name }}</strong>
-            <span>{{ auth.user.roles.join(', ') }}</span>
-          </div>
+          <RouterLink class="profile-entry" to="/profile">
+            <span v-if="auth.user.avatar_url" class="avatar-image-wrap">
+              <img :src="auth.user.avatar_url" alt="avatar" class="avatar-image" />
+            </span>
+            <span v-else class="avatar-fallback">{{ auth.avatarText }}</span>
+            <div class="user-meta">
+              <strong>{{ auth.user.display_name }}</strong>
+              <span>{{ auth.user.roles.join(', ') }}</span>
+            </div>
+          </RouterLink>
           <button type="button" class="secondary-button" @click="signOut">退出</button>
         </template>
         <RouterLink v-else-if="auth.securityEnabled" class="secondary-link" to="/login">登录</RouterLink>
@@ -95,9 +101,34 @@ body {
 .nav-menu a:hover, .secondary-link:hover { background-color: #1e293b; color: #ffffff; }
 .nav-menu a.router-link-active { background-color: #2563eb; color: #ffffff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); }
 .user-block { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.user-meta { display: grid; gap: 2px; text-align: right; }
+.profile-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.2s ease;
+}
+.profile-entry:hover { background-color: rgba(255, 255, 255, 0.08); }
+.user-meta { display: grid; gap: 2px; text-align: left; }
 .user-meta strong { font-size: 14px; color: #ffffff; }
 .user-meta span { font-size: 12px; color: #94a3b8; }
+.avatar-fallback,
+.avatar-image-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 700;
+}
+.avatar-image { width: 100%; height: 100%; object-fit: cover; }
 .main-content { flex: 1; padding: 32px; max-width: 1440px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 .secondary-button {
   min-height: 36px;

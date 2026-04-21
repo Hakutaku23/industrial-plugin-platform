@@ -50,6 +50,80 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _admin_user_ids(users: list[dict[str, Any]]) -> list[int]:
+    admin_ids: list[int] = []
+    for user in users:
+        roles = user.get('roles', [])
+        if isinstance(roles, list) and 'admin' in roles:
+            admin_ids.append(int(user['id']))
+    return admin_ids
+
+
+def _sole_admin_user_id(users: list[dict[str, Any]]) -> int | None:
+    admin_ids = _admin_user_ids(users)
+    return admin_ids[0] if len(admin_ids) == 1 else None
+
+
+def _guard_single_admin_create(*, roles: list[str], security_store: SecurityStore) -> None:
+    normalized = {str(role).strip().lower() for role in roles if str(role).strip()}
+    if 'admin' not in normalized:
+        return
+    if _admin_user_ids(security_store.list_users()):
+        raise HTTPException(status_code=409, detail='系统仅允许一个管理员用户，当前已存在管理员。')
+
+
+def _guard_single_admin_status_update(
+    *,
+    target_user: dict[str, Any],
+    next_status: str | None,
+    actor_user_id: int | None,
+    security_store: SecurityStore,
+) -> None:
+    if next_status is None or next_status == 'active':
+        return
+
+    users = security_store.list_users()
+    sole_admin_id = _sole_admin_user_id(users)
+    target_user_id = int(target_user['id'])
+    target_roles = target_user.get('roles', [])
+    target_is_admin = isinstance(target_roles, list) and 'admin' in target_roles
+
+    if target_is_admin and sole_admin_id == target_user_id:
+        if actor_user_id == target_user_id:
+            detail = '管理员不能将自己的账号状态修改为 disabled 或 locked，否则会导致系统管理权限丢失。'
+        else:
+            detail = '当前系统仅有一个管理员，不能将其账号状态修改为 disabled 或 locked。'
+        raise HTTPException(status_code=409, detail=detail)
+
+
+def _guard_single_admin_role_assignment(
+    *,
+    target_user: dict[str, Any],
+    roles: list[str],
+    actor_user_id: int | None,
+    security_store: SecurityStore,
+) -> None:
+    normalized = [str(role).strip().lower() for role in roles if str(role).strip()]
+    requested_admin = 'admin' in normalized
+
+    users = security_store.list_users()
+    admin_ids = _admin_user_ids(users)
+    sole_admin_id = _sole_admin_user_id(users)
+    target_user_id = int(target_user['id'])
+    current_roles = target_user.get('roles', [])
+    target_is_admin = isinstance(current_roles, list) and 'admin' in current_roles
+
+    if requested_admin and admin_ids and target_user_id not in admin_ids:
+        raise HTTPException(status_code=409, detail='系统仅允许一个管理员用户，不能再将其他用户设置为管理员。')
+
+    if target_is_admin and sole_admin_id == target_user_id and not requested_admin:
+        if actor_user_id == target_user_id:
+            detail = '管理员不能移除自己的管理员角色，否则会导致系统管理权限丢失。'
+        else:
+            detail = '当前系统仅有一个管理员，不能移除其管理员角色。'
+        raise HTTPException(status_code=409, detail=detail)
+
+
 class RunRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -104,6 +178,14 @@ class AssignRolesRequest(BaseModel):
     roles: list[str] = Field(default_factory=list)
 
 
+class UpdateProfileRequest(BaseModel):
+    display_name: str | None = None
+    email: str | None = None
+    avatar_url: str | None = None
+    current_password: str | None = None
+    new_password: str | None = Field(default=None, min_length=8)
+
+
 @router.get('/health')
 def health() -> dict[str, str]:
     return {'status': 'ok'}
@@ -139,9 +221,70 @@ def auth_me(principal: Principal = Depends(get_optional_principal)) -> dict[str,
             'username': principal.username,
             'display_name': principal.display_name,
             'email': principal.email,
+            'avatar_url': principal.avatar_url,
             'roles': principal.roles,
             'permissions': principal.permissions,
         } if (principal.authenticated or not settings.security.enabled) else None,
+    }
+
+
+@router.patch('/auth/me')
+def update_my_profile(payload: UpdateProfileRequest, request: Request, principal: Principal = Depends(get_optional_principal)) -> dict[str, Any]:
+    if settings.security.enabled and not principal.authenticated:
+        raise HTTPException(status_code=401, detail='authentication required')
+    if principal.user_id is None:
+        raise HTTPException(status_code=400, detail='local development mode does not support profile editing')
+
+    security_store = _security_store()
+    auth_user = security_store.get_auth_user(principal.username)
+    if auth_user is None:
+        raise HTTPException(status_code=404, detail='user not found')
+
+    password_hash: str | object = None
+    if payload.new_password:
+        current_password = (payload.current_password or '').strip()
+        if not current_password:
+            raise HTTPException(status_code=400, detail='current password is required when changing password')
+        if not verify_password(current_password, auth_user.get('password_hash', '')):
+            raise HTTPException(status_code=400, detail='current password is incorrect')
+        password_hash = make_password_hash(payload.new_password)
+
+    profile_kwargs: dict[str, Any] = {'user_id': int(principal.user_id)}
+    if payload.display_name is not None:
+        profile_kwargs['display_name'] = payload.display_name.strip()
+    if payload.email is not None:
+        profile_kwargs['email'] = payload.email.strip() or None
+    if payload.avatar_url is not None:
+        profile_kwargs['avatar_url'] = payload.avatar_url.strip() or None
+    if payload.new_password:
+        profile_kwargs['password_hash'] = password_hash
+
+    updated = security_store.update_user(**profile_kwargs)
+    if updated is None:
+        raise HTTPException(status_code=404, detail='user not found')
+
+    _store().record_audit_event(
+        event_type='security.user.profile_updated',
+        target_type='user',
+        target_id=str(principal.user_id),
+        actor=principal.username,
+        details={'ip': _client_ip(request)},
+    )
+    return updated
+
+
+@router.get('/auth/me/permissions')
+def my_permissions(principal: Principal = Depends(get_optional_principal)) -> dict[str, Any]:
+    if settings.security.enabled and not principal.authenticated:
+        raise HTTPException(status_code=401, detail='authentication required')
+
+    security_store = _security_store()
+    owned = set(principal.permissions)
+    all_permissions = security_store.list_permissions()
+    return {
+        'owned': [item for item in all_permissions if item['code'] in owned],
+        'missing': [item for item in all_permissions if item['code'] not in owned],
+        'all': all_permissions,
     }
 
 
@@ -217,8 +360,10 @@ def list_users(principal: Principal = Depends(require_permission('user.read'))) 
 
 @router.post('/users', status_code=status.HTTP_201_CREATED)
 def create_user(payload: CreateUserRequest, request: Request, principal: Principal = Depends(require_permission('user.create'))) -> dict[str, Any]:
+    security_store = _security_store()
+    _guard_single_admin_create(roles=payload.roles, security_store=security_store)
     try:
-        user = _security_store().create_user(
+        user = security_store.create_user(
             username=payload.username.strip(),
             display_name=payload.display_name.strip(),
             email=payload.email.strip() if payload.email else None,
@@ -226,7 +371,7 @@ def create_user(payload: CreateUserRequest, request: Request, principal: Princip
             roles=payload.roles,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     _store().record_audit_event(
         event_type='security.user.created',
@@ -240,17 +385,37 @@ def create_user(payload: CreateUserRequest, request: Request, principal: Princip
 
 @router.patch('/users/{user_id}')
 def update_user(user_id: int, payload: UpdateUserRequest, request: Request, principal: Principal = Depends(require_permission('user.update'))) -> dict[str, Any]:
-    updated = _security_store().update_user(
-        user_id=user_id,
-        display_name=payload.display_name.strip() if payload.display_name else None,
-        email=payload.email.strip() if payload.email else None,
-        password_hash=make_password_hash(payload.password) if payload.password else None,
-        status=payload.status,
+    security_store = _security_store()
+    current = security_store.get_user(user_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f'user not found: {user_id}')
+
+    _guard_single_admin_status_update(
+        target_user=current,
+        next_status=payload.status,
+        actor_user_id=principal.user_id,
+        security_store=security_store,
     )
+
+    update_kwargs: dict[str, Any] = {'user_id': user_id}
+    if payload.display_name is not None:
+        update_kwargs['display_name'] = payload.display_name.strip()
+    if payload.email is not None:
+        update_kwargs['email'] = payload.email.strip() or None
+    if payload.password is not None:
+        update_kwargs['password_hash'] = make_password_hash(payload.password)
+    if payload.status is not None:
+        update_kwargs['status'] = payload.status
+
+    try:
+        updated = security_store.update_user(**update_kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     if updated is None:
         raise HTTPException(status_code=404, detail=f'user not found: {user_id}')
     if payload.status and payload.status != 'active':
-        _security_store().revoke_user_sessions(user_id=user_id)
+        security_store.revoke_user_sessions(user_id=user_id)
     _store().record_audit_event(
         event_type='security.user.updated',
         target_type='user',
@@ -263,13 +428,25 @@ def update_user(user_id: int, payload: UpdateUserRequest, request: Request, prin
 
 @router.post('/users/{user_id}/roles')
 def assign_user_roles(user_id: int, payload: AssignRolesRequest, request: Request, principal: Principal = Depends(require_permission('user.assign_roles'))) -> dict[str, Any]:
+    security_store = _security_store()
+    current = security_store.get_user(user_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f'user not found: {user_id}')
+
+    _guard_single_admin_role_assignment(
+        target_user=current,
+        roles=payload.roles,
+        actor_user_id=principal.user_id,
+        security_store=security_store,
+    )
+
     try:
-        updated = _security_store().set_user_roles(user_id=user_id, roles=payload.roles)
+        updated = security_store.set_user_roles(user_id=user_id, roles=payload.roles)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if updated is None:
         raise HTTPException(status_code=404, detail=f'user not found: {user_id}')
-    _security_store().revoke_user_sessions(user_id=user_id)
+    security_store.revoke_user_sessions(user_id=user_id)
     _store().record_audit_event(
         event_type='security.user.roles_updated',
         target_type='user',
@@ -451,21 +628,18 @@ def delete_data_source(data_source_id: int, request: Request, principal: Princip
 
 
 @router.post('/instances', status_code=status.HTTP_201_CREATED)
-def create_plugin_instance(request: PluginInstanceRequest, principal: Principal = Depends(require_permission('instance.create'))) -> dict[str, object]:
-    try:
-        result = _store().create_plugin_instance(
-            name=request.name,
-            package_name=request.package_name,
-            version=request.version,
-            input_bindings=request.input_bindings,
-            output_bindings=request.output_bindings,
-            config=request.config,
-            writeback_enabled=request.writeback_enabled,
-            schedule_enabled=request.schedule_enabled,
-            schedule_interval_sec=request.schedule_interval_sec,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+def upsert_plugin_instance(request: PluginInstanceRequest, principal: Principal = Depends(require_permission('instance.create'))) -> dict[str, object]:
+    result = _store().upsert_plugin_instance(
+        name=request.name,
+        package_name=request.package_name,
+        version=request.version,
+        input_bindings=request.input_bindings,
+        output_bindings=request.output_bindings,
+        config=request.config,
+        writeback_enabled=request.writeback_enabled,
+        schedule_enabled=request.schedule_enabled,
+        schedule_interval_sec=request.schedule_interval_sec,
+    )
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -483,21 +657,18 @@ def create_plugin_instance(request: PluginInstanceRequest, principal: Principal 
 
 @router.put('/instances/{instance_id}')
 def update_plugin_instance(instance_id: int, request: PluginInstanceRequest, principal: Principal = Depends(require_permission('instance.update'))) -> dict[str, object]:
-    try:
-        result = _store().update_plugin_instance(
-            instance_id=instance_id,
-            name=request.name,
-            package_name=request.package_name,
-            version=request.version,
-            input_bindings=request.input_bindings,
-            output_bindings=request.output_bindings,
-            config=request.config,
-            writeback_enabled=request.writeback_enabled,
-            schedule_enabled=request.schedule_enabled,
-            schedule_interval_sec=request.schedule_interval_sec,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    result = _store().update_plugin_instance(
+        instance_id=instance_id,
+        name=request.name,
+        package_name=request.package_name,
+        version=request.version,
+        input_bindings=request.input_bindings,
+        output_bindings=request.output_bindings,
+        config=request.config,
+        writeback_enabled=request.writeback_enabled,
+        schedule_enabled=request.schedule_enabled,
+        schedule_interval_sec=request.schedule_interval_sec,
+    )
     if result is None:
         raise HTTPException(
             status_code=404,

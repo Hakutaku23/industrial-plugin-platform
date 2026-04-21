@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { ApiError } from '../api/client'
-import { getMe, getSecurityStatus, login, logout, type AuthMeResponse } from '../api/auth'
+import { getMe, getSecurityStatus, login, logout } from '../api/auth'
 
 interface UserInfo {
   id: number | null
   username: string
   display_name: string
   email: string | null
+  avatar_url: string | null
   roles: string[]
   permissions: string[]
 }
@@ -23,6 +24,10 @@ export const useAuthStore = defineStore('auth', {
   getters: {
     can: (state) => (permission: string) => !state.securityEnabled || Boolean(state.user?.permissions.includes(permission)),
     isAdmin: (state) => state.user?.roles.includes('admin') ?? false,
+    avatarText: (state) => {
+      const source = state.user?.display_name || state.user?.username || 'U'
+      return source.trim().slice(0, 1).toUpperCase()
+    },
   },
   actions: {
     async bootstrap() {
@@ -37,6 +42,7 @@ export const useAuthStore = defineStore('auth', {
           username: 'local-dev',
           display_name: 'Local Development',
           email: null,
+          avatar_url: null,
           roles: ['admin'],
           permissions: [],
         }

@@ -18,6 +18,7 @@ class Principal:
     username: str
     display_name: str
     email: str | None
+    avatar_url: str | None
     roles: list[str]
     permissions: list[str]
     authenticated: bool
@@ -70,6 +71,7 @@ async def get_optional_principal(request: Request) -> Principal:
             username='local-dev',
             display_name='Local Development',
             email=None,
+            avatar_url=None,
             roles=['admin'],
             permissions=[permission for permissions in [] for permission in permissions],
             authenticated=False,
@@ -82,6 +84,7 @@ async def get_optional_principal(request: Request) -> Principal:
             username='anonymous',
             display_name='Anonymous',
             email=None,
+            avatar_url=None,
             roles=[],
             permissions=[],
             authenticated=False,
@@ -94,6 +97,7 @@ async def get_optional_principal(request: Request) -> Principal:
             username='anonymous',
             display_name='Anonymous',
             email=None,
+            avatar_url=None,
             roles=[],
             permissions=[],
             authenticated=False,
@@ -104,6 +108,7 @@ async def get_optional_principal(request: Request) -> Principal:
         username=session_user.username,
         display_name=session_user.display_name,
         email=session_user.email,
+        avatar_url=session_user.avatar_url,
         roles=session_user.roles,
         permissions=session_user.permissions,
         authenticated=True,
