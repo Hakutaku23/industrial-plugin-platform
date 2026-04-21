@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 
@@ -144,12 +145,104 @@ class RedisConnector(Connector):
         return f"{self.prefix}{self.separator}{normalized_tag}"
 
 
+class TDengineConnector(Connector):
+    def __init__(self, data_source: dict[str, Any]) -> None:
+        self.data_source = data_source
+        config = data_source["config"]
+        self.url = str(config.get("url", "http://127.0.0.1:6041")).strip()
+        self.user = str(config.get("user", "root")).strip() or "root"
+        self.password = str(config.get("password", ""))
+        self.database = str(config.get("database", "")).strip()
+        self.table_name = str(config.get("table_name", config.get("tableName", ""))).strip()
+        self.timezone = str(config.get("timezone", "Asia/Shanghai")).strip() or "Asia/Shanghai"
+
+    def read_tag(self, tag: str) -> Any:
+        raise ConnectorError(
+            "tdengine history data source requires instance-level query parameters; use query_history() in a future runtime integration",
+        )
+
+    def read_tags(self, tags: list[str]) -> dict[str, Any]:
+        raise ConnectorError(
+            "tdengine history data source requires instance-level query parameters; generic point binding is not enabled yet",
+        )
+
+    def write_tag(self, tag: str, value: Any) -> None:
+        raise ConnectorError("tdengine data source is read-only")
+
+    def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {
+            tag: {"status": "failed", "value": value, "reason": "tdengine data source is read-only"}
+            for tag, value in values.items()
+        }
+
+    def query_history(self, tags: list[str], *, start_time: datetime, end_time: datetime):
+        try:
+            import pandas as pd
+            import taosrest
+        except ImportError as exc:  # pragma: no cover
+            raise ConnectorError("taosrest and pandas must be installed to query TDengine history data") from exc
+
+        normalized_tags = _unique_tags(tags)
+        if not normalized_tags:
+            raise ConnectorError("tdengine query requires at least one configured tag")
+        if not self.database:
+            raise ConnectorError("tdengine database is not configured")
+        if not self.table_name:
+            raise ConnectorError("tdengine table_name is not configured")
+        if start_time > end_time:
+            raise ConnectorError("tdengine query start_time must be earlier than end_time")
+
+        for tag in normalized_tags:
+            ensure_tag_access(self.data_source, tag, "read")
+
+        conn = None
+        try:
+            conn = taosrest.connect(
+                url=self.url,
+                user=self.user,
+                password=self.password,
+                database=self.database,
+                timezone=self.timezone,
+            )
+            cursor = conn.cursor()
+            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            if len(normalized_tags) == 1:
+                tag_sql = f"point_code='{_sql_quote(normalized_tags[0])}'"
+            else:
+                quoted = ", ".join(f"'{_sql_quote(tag)}'" for tag in normalized_tags)
+                tag_sql = f"point_code IN ({quoted})"
+            sql = (
+                f"SELECT ts, point_value, point_code FROM {self.table_name} "
+                f"WHERE {tag_sql} AND ts >= '{start_time_str}' AND ts <= '{end_time_str}'"
+            )
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            if not rows:
+                return pd.DataFrame(columns=["ts", *normalized_tags])
+            df = pd.DataFrame(rows, columns=["ts", "point_value", "point_code"])
+            wide = (
+                df.pivot_table(index="ts", columns="point_code", values="point_value", aggfunc="first")
+                .sort_index()
+                .reset_index()
+            )
+            wide.columns.name = None
+            return wide
+        except Exception as exc:  # noqa: BLE001
+            raise ConnectorError(f"tdengine query failed: {exc}") from exc
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 def build_connector(data_source: dict[str, Any], store) -> Connector:
     connector_type = data_source["connector_type"]
     if connector_type == "mock":
         return MockConnector(data_source, store)
     if connector_type == "redis":
         return RedisConnector(data_source)
+    if connector_type == "tdengine":
+        return TDengineConnector(data_source)
     raise ConnectorError(f"unsupported connector type: {connector_type}")
 
 
@@ -240,3 +333,19 @@ def _coerce_scalar(value: str) -> Any:
         return int(value)
     except ValueError:
         return value
+
+
+def _unique_tags(tags: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        normalized = str(tag).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _sql_quote(value: str) -> str:
+    return value.replace("'", "''")

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import {
   deleteDataSource,
   listDataSources,
@@ -41,12 +41,18 @@ const points = ref<PointRow[]>(defaultPoints())
 function defaultForm() {
   return {
     name: 'mock-line-a',
-    connector_type: 'mock' as 'mock' | 'redis',
+    connector_type: 'mock' as 'mock' | 'redis' | 'tdengine',
     host: '127.0.0.1',
     port: 6379,
     db: 0,
     keyPrefix: '',
     keySeparator: ':',
+    tdengineUrl: 'http://127.0.0.1:6041',
+    tdengineUser: 'root',
+    tdenginePassword: '',
+    tdengineDatabase: 'test',
+    tdengineTableName: 'history',
+    tdengineTimezone: 'Asia/Shanghai',
     read_enabled: true,
     write_enabled: true,
   }
@@ -72,6 +78,32 @@ function resetForm() {
   error.value = ''
 }
 
+function isTdengineForm() {
+  return form.value.connector_type === 'tdengine'
+}
+
+function supportsWriteBindings() {
+  return form.value.connector_type !== 'tdengine'
+}
+
+function applyConnectorTypeRules() {
+  if (isTdengineForm()) {
+    form.value.read_enabled = true
+    form.value.write_enabled = false
+    for (const point of points.value) {
+      point.writeEnabled = false
+      point.writeTag = ''
+    }
+  }
+}
+
+watch(
+  () => form.value.connector_type,
+  () => {
+    applyConnectorTypeRules()
+  },
+)
+
 async function loadDataSources() {
   loading.value = true
   error.value = ''
@@ -93,6 +125,7 @@ function addPoint() {
     writeTag: '',
     mockValue: '',
   })
+  applyConnectorTypeRules()
 }
 
 function removePoint(index: number) {
@@ -118,8 +151,8 @@ function buildNormalizedPoints() {
       pointClass: point.pointClass.trim(),
       canRead: point.readEnabled,
       readTag: point.readEnabled ? point.readTag.trim() : '',
-      canWrite: point.writeEnabled,
-      writeTag: point.writeEnabled ? point.writeTag.trim() : '',
+      canWrite: supportsWriteBindings() ? point.writeEnabled : false,
+      writeTag: supportsWriteBindings() && point.writeEnabled ? point.writeTag.trim() : '',
       mockValue: point.readEnabled ? point.mockValue.trim() : '',
     }))
     .filter((point) => point.pointClass || point.readTag || point.writeTag)
@@ -158,11 +191,19 @@ function validateForm() {
     }
   }
 
+  if (form.value.connector_type === 'tdengine') {
+    if (!form.value.tdengineUrl.trim()) throw new Error('请填写 TDEngine URL')
+    if (!form.value.tdengineDatabase.trim()) throw new Error('请填写 TDEngine 数据库名')
+    if (!form.value.tdengineTableName.trim()) throw new Error('请填写 TDEngine 表名')
+    form.value.read_enabled = true
+    form.value.write_enabled = false
+  }
+
   const normalizedPoints = buildNormalizedPoints()
   for (let index = 0; index < normalizedPoints.length; index += 1) {
     const point = normalizedPoints[index]
     if (point.canRead && !point.readTag) {
-      throw new Error(`位点 #${index + 1} 已启用读取，但未填写读取标签`) 
+      throw new Error(`位点 #${index + 1} 已启用读取，但未填写读取标签`)
     }
     if (point.canWrite && !point.writeTag) {
       throw new Error(`位点 #${index + 1} 已启用回写，但未填写回写标签`)
@@ -211,6 +252,21 @@ function buildConfig() {
       pointCatalog,
       readTags,
       writeTags,
+    }
+  }
+
+  if (form.value.connector_type === 'tdengine') {
+    return {
+      url: form.value.tdengineUrl.trim(),
+      user: form.value.tdengineUser.trim() || 'root',
+      password: form.value.tdenginePassword,
+      database: form.value.tdengineDatabase.trim(),
+      table_name: form.value.tdengineTableName.trim(),
+      timezone: form.value.tdengineTimezone.trim() || 'Asia/Shanghai',
+      pointCatalog,
+      readTags,
+      writeTags: [],
+      return_type: 'dataframe',
     }
   }
 
@@ -335,8 +391,8 @@ function buildPointRowsFromSource(source: DataSourceRecord): PointRow[] {
         pointClass: pointClass(point),
         readEnabled: canRead(point),
         readTag: resolvedReadTag,
-        writeEnabled: canWrite(point),
-        writeTag: writeTag(point),
+        writeEnabled: source.connector_type === 'tdengine' ? false : canWrite(point),
+        writeTag: source.connector_type === 'tdengine' ? '' : writeTag(point),
         mockValue: rawMockValue === undefined || rawMockValue === null ? '' : String(rawMockValue),
       }
     })
@@ -367,8 +423,8 @@ function buildPointRowsFromSource(source: DataSourceRecord): PointRow[] {
     pointClass: '',
     readEnabled: readTags.includes(tag),
     readTag: readTags.includes(tag) ? tag : '',
-    writeEnabled: writeTags.includes(tag),
-    writeTag: writeTags.includes(tag) ? tag : '',
+    writeEnabled: source.connector_type === 'tdengine' ? false : writeTags.includes(tag),
+    writeTag: source.connector_type === 'tdengine' ? '' : writeTags.includes(tag) ? tag : '',
     mockValue: tag in pointValues ? String(pointValues[tag]) : '',
   }))
 }
@@ -383,14 +439,24 @@ function edit(source: DataSourceRecord) {
     db: Number(source.config.db ?? 0),
     keyPrefix: String(source.config.keyPrefix ?? source.config.key_prefix ?? ''),
     keySeparator: String(source.config.keySeparator ?? source.config.key_separator ?? ':'),
-    read_enabled: source.read_enabled,
-    write_enabled: source.write_enabled,
+    tdengineUrl: String(source.config.url ?? 'http://127.0.0.1:6041'),
+    tdengineUser: String(source.config.user ?? 'root'),
+    tdenginePassword: String(source.config.password ?? ''),
+    tdengineDatabase: String(source.config.database ?? 'test'),
+    tdengineTableName: String(source.config.table_name ?? source.config.tableName ?? 'history'),
+    tdengineTimezone: String(source.config.timezone ?? 'Asia/Shanghai'),
+    read_enabled: source.connector_type === 'tdengine' ? true : source.read_enabled,
+    write_enabled: source.connector_type === 'tdengine' ? false : source.write_enabled,
   }
   points.value = buildPointRowsFromSource(source)
+  applyConnectorTypeRules()
   error.value = ''
 }
 
-onMounted(loadDataSources)
+onMounted(() => {
+  applyConnectorTypeRules()
+  loadDataSources()
+})
 </script>
 
 <template>
@@ -399,7 +465,7 @@ onMounted(loadDataSources)
       <div>
         <p class="eyebrow">Connectors</p>
         <h2>数据源与位点</h2>
-        <p>配置 Mock 或 Redis 数据源，并为每个点独立声明读取和回写权限。</p>
+        <p>配置 Mock、Redis 或 TDEngine 数据源。TDEngine 当前只做历史只读数据源配置，查询时间范围和返回内容后续在实例运行界面输入。</p>
       </div>
       <button type="button" class="secondary-button" @click="loadDataSources" :disabled="loading">
         {{ loading ? '刷新中' : '刷新' }}
@@ -418,15 +484,16 @@ onMounted(loadDataSources)
         <select v-model="form.connector_type">
           <option value="mock">Mock</option>
           <option value="redis">Redis</option>
+          <option value="tdengine">TDEngine</option>
         </select>
       </label>
       <label class="checkbox-line">
-        <input v-model="form.read_enabled" type="checkbox" />
+        <input v-model="form.read_enabled" type="checkbox" :disabled="isTdengineForm()" />
         数据源允许读取
       </label>
       <label class="checkbox-line">
-        <input v-model="form.write_enabled" type="checkbox" />
-        数据源允许回写
+        <input v-model="form.write_enabled" type="checkbox" :disabled="isTdengineForm()" />
+        {{ isTdengineForm() ? 'TDEngine 历史数据源固定为只读' : '数据源允许回写' }}
       </label>
 
       <template v-if="form.connector_type === 'redis'">
@@ -452,6 +519,33 @@ onMounted(loadDataSources)
         </label>
       </template>
 
+      <template v-if="form.connector_type === 'tdengine'">
+        <label>
+          TDEngine URL
+          <input v-model="form.tdengineUrl" placeholder="如 http://127.0.0.1:6041" />
+        </label>
+        <label>
+          用户名
+          <input v-model="form.tdengineUser" placeholder="默认 root" />
+        </label>
+        <label>
+          密码
+          <input v-model="form.tdenginePassword" type="password" placeholder="如 taosdata" />
+        </label>
+        <label>
+          数据库名
+          <input v-model="form.tdengineDatabase" placeholder="如 history" />
+        </label>
+        <label>
+          表名
+          <input v-model="form.tdengineTableName" placeholder="如 point_history" />
+        </label>
+        <label>
+          时区
+          <input v-model="form.tdengineTimezone" placeholder="默认 Asia/Shanghai" />
+        </label>
+      </template>
+
       <div class="wide-field">
         <div class="section-title">
           <strong>位点</strong>
@@ -460,9 +554,9 @@ onMounted(loadDataSources)
         <div class="point-grid point-grid-head" :class="{ 'point-grid-mock': form.connector_type === 'mock' }">
           <span>点所属类</span>
           <span>读取</span>
-          <span>读取标签 / Redis 位点名</span>
+          <span>{{ form.connector_type === 'tdengine' ? '点位编码 / 历史标签' : '读取标签 / Redis 位点名' }}</span>
           <span>回写</span>
-          <span>回写标签 / Redis 位点名</span>
+          <span>{{ form.connector_type === 'tdengine' ? '回写说明' : '回写标签 / Redis 位点名' }}</span>
           <span v-if="form.connector_type === 'mock'">Mock 值</span>
           <span>操作</span>
         </div>
@@ -480,17 +574,23 @@ onMounted(loadDataSources)
           <input
             v-model="point.readTag"
             :disabled="!point.readEnabled"
-            placeholder="如 DCS_AO_RTO_014_AI"
+            :placeholder="form.connector_type === 'tdengine' ? '如 DCS_AO_RTO_014_AI' : '如 DCS_AO_RTO_014_AI'"
           />
-          <label class="inline-check">
-            <input v-model="point.writeEnabled" type="checkbox" @change="disableWrite(point)" />
-            可写
-          </label>
-          <input
-            v-model="point.writeTag"
-            :disabled="!point.writeEnabled"
-            placeholder="如 DCS_AO_RTO_020_AI"
-          />
+          <template v-if="supportsWriteBindings()">
+            <label class="inline-check">
+              <input v-model="point.writeEnabled" type="checkbox" @change="disableWrite(point)" />
+              可写
+            </label>
+            <input
+              v-model="point.writeTag"
+              :disabled="!point.writeEnabled"
+              placeholder="如 DCS_AO_RTO_020_AI"
+            />
+          </template>
+          <template v-else>
+            <div class="inline-check muted">只读</div>
+            <input value="TDEngine 历史数据源不支持回写" disabled />
+          </template>
           <input
             v-if="form.connector_type === 'mock'"
             v-model="point.mockValue"
@@ -499,6 +599,9 @@ onMounted(loadDataSources)
           />
           <button type="button" class="danger-button" @click="removePoint(index)">删除</button>
         </div>
+        <p v-if="form.connector_type === 'tdengine'" class="muted">
+          当前只保存 TDEngine 连接信息与可读点目录。后续实例运行时再输入开始时间、结束时间、采样间隔和返回列，默认按 DataFrame 形式返回。
+        </p>
       </div>
 
       <div class="row-actions wide-field">

@@ -85,7 +85,7 @@ export interface WritebackRecord {
 export interface DataSourceRecord {
   id: number
   name: string
-  connector_type: 'mock' | 'redis'
+  connector_type: 'mock' | 'redis' | 'tdengine'
   config: Record<string, unknown>
   read_enabled: boolean
   write_enabled: boolean
@@ -96,7 +96,7 @@ export interface DataSourceRecord {
 
 export interface DataSourceSavePayload {
   name: string
-  connector_type: 'mock' | 'redis'
+  connector_type: 'mock' | 'redis' | 'tdengine'
   config: Record<string, unknown>
   read_enabled: boolean
   write_enabled: boolean

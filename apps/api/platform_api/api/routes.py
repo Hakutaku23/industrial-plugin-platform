@@ -57,7 +57,7 @@ class RunRequest(BaseModel):
 
 class DataSourceRequest(BaseModel):
     name: str
-    connector_type: str = Field(pattern='^(mock|redis)$')
+    connector_type: str = Field(pattern='^(mock|redis|tdengine)$')
     config: dict[str, Any] = Field(default_factory=dict)
     read_enabled: bool = True
     write_enabled: bool = False
