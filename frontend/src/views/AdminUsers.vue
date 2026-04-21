@@ -7,6 +7,9 @@ const saving = ref(false)
 const error = ref('')
 const users = ref<UserRecord[]>([])
 const roles = ref<RoleRecord[]>([])
+
+// 创建用户表单状态 (改为折叠式)
+const showCreateForm = ref(false)
 const form = ref({
   username: '',
   display_name: '',
@@ -14,7 +17,11 @@ const form = ref({
   password: '',
   roles: ['viewer'] as string[],
 })
-const passwordDrafts = ref<Record<number, string>>({})
+
+// 编辑状态控制 (只允许同时编辑一个用户)
+const editingUserId = ref<number | null>(null)
+const editDraft = ref<Partial<UserRecord>>({})
+const editPasswordDraft = ref('')
 
 const roleOptions = computed(() => roles.value.map((item) => item.name))
 
@@ -42,6 +49,7 @@ async function submitUser() {
       roles: form.value.roles,
     })
     form.value = { username: '', display_name: '', email: '', password: '', roles: ['viewer'] }
+    showCreateForm.value = false
     await loadAll()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '用户创建失败'
@@ -50,28 +58,49 @@ async function submitUser() {
   }
 }
 
-async function saveRoles(user: UserRecord) {
-  try {
-    await assignUserRoles(user.id, user.roles)
-    await loadAll()
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : '角色更新失败'
-  }
+// 开启编辑模式
+function startEdit(user: UserRecord) {
+  editingUserId.value = user.id
+  editDraft.value = { ...user, roles: [...user.roles] }
+  editPasswordDraft.value = ''
 }
 
-async function saveProfile(user: UserRecord) {
+// 取消编辑模式
+function cancelEdit() {
+  editingUserId.value = null
+  editDraft.value = {}
+  editPasswordDraft.value = ''
+}
+
+// 统一保存用户资料和角色
+async function saveEdit() {
+  if (!editingUserId.value) return
+  saving.value = true
+  error.value = ''
   try {
-    const password = passwordDrafts.value[user.id]?.trim()
-    await updateUser(user.id, {
-      display_name: user.display_name,
-      email: user.email || '',
-      status: user.status,
+    const id = editingUserId.value
+    const draft = editDraft.value
+    const password = editPasswordDraft.value?.trim()
+    
+    // 1. 更新基本资料
+    await updateUser(id, {
+      display_name: draft.display_name || '',
+      email: draft.email || '',
+      status: draft.status || 'active',
       ...(password ? { password } : {}),
     })
-    passwordDrafts.value[user.id] = ''
+
+    // 2. 更新角色分配
+    if (draft.roles) {
+      await assignUserRoles(id, draft.roles)
+    }
+
+    editingUserId.value = null
     await loadAll()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '用户更新失败'
+    error.value = err instanceof Error ? err.message : '更新失败'
+  } finally {
+    saving.value = false
   }
 }
 
@@ -86,99 +115,322 @@ onMounted(loadAll)
         <h2>用户与角色</h2>
         <p>Admin 可在这里创建本地用户、分配角色，并控制账号状态。</p>
       </div>
-      <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
-        {{ loading ? '刷新中' : '刷新' }}
-      </button>
+      <div class="heading-actions">
+        <button type="button" class="secondary-button" @click="showCreateForm = !showCreateForm">
+          {{ showCreateForm ? '取消创建' : '创建用户' }}
+        </button>
+        <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
+          {{ loading ? '刷新中...' : '刷新' }}
+        </button>
+      </div>
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
 
-    <form class="config-form create-user-form" @submit.prevent="submitUser">
-      <label>
-        <span>用户名</span>
-        <input v-model="form.username" required />
-      </label>
-      <label>
-        <span>显示名</span>
-        <input v-model="form.display_name" required />
-      </label>
-      <label>
-        <span>邮箱</span>
-        <input v-model="form.email" />
-      </label>
-      <label>
-        <span>初始密码</span>
-        <input v-model="form.password" type="password" minlength="8" required />
-      </label>
-      <label>
-        <span>角色</span>
-        <select v-model="form.roles" multiple size="4">
-          <option v-for="role in roleOptions" :key="role" :value="role">{{ role }}</option>
-        </select>
-      </label>
-      <div class="form-actions wide-field">
-        <button type="submit" :disabled="saving">{{ saving ? '创建中' : '创建用户' }}</button>
-      </div>
-    </form>
-
-    <div v-for="user in users" :key="user.id" class="package-row user-card">
-      <div class="user-card-head">
-        <div>
-          <p class="eyebrow">{{ user.username }}</p>
-          <h3>{{ user.display_name }}</h3>
-          <p>{{ user.email || '未设置邮箱' }}</p>
+    <!-- 顶部创建用户表单 (收纳交互) -->
+    <div v-if="showCreateForm" class="create-section">
+      <form class="config-form" @submit.prevent="submitUser">
+        <h3>新增用户</h3>
+        <div class="form-grid">
+          <label>
+            <span>用户名</span>
+            <input v-model="form.username" required placeholder="登录账号" />
+          </label>
+          <label>
+            <span>显示名</span>
+            <input v-model="form.display_name" required placeholder="用户昵称" />
+          </label>
+          <label>
+            <span>邮箱</span>
+            <input v-model="form.email" type="email" placeholder="example@domain.com" />
+          </label>
+          <label>
+            <span>初始密码</span>
+            <input v-model="form.password" type="password" minlength="8" required placeholder="至少 8 位密码" />
+          </label>
+          <label class="full-width">
+            <span>分配角色</span>
+            <!-- 摒弃 Select Multiple 改用易用的 Checkbox -->
+            <div class="checkbox-group">
+              <label v-for="role in roleOptions" :key="role" class="checkbox-label">
+                <input type="checkbox" :value="role" v-model="form.roles" />
+                {{ role }}
+              </label>
+            </div>
+          </label>
         </div>
-        <div class="package-meta">
-          <span>{{ user.status }}</span>
-          <span>{{ user.auth_source }}</span>
+        <div class="form-actions">
+          <button type="button" class="secondary-button" @click="showCreateForm = false">取消</button>
+          <button type="submit" :disabled="saving">{{ saving ? '创建中...' : '确认创建' }}</button>
         </div>
-      </div>
+      </form>
+    </div>
 
-      <div class="user-grid">
-        <label>
-          <span>显示名</span>
-          <input v-model="user.display_name" />
-        </label>
-        <label>
-          <span>邮箱</span>
-          <input v-model="user.email" />
-        </label>
-        <label>
-          <span>状态</span>
-          <select v-model="user.status">
-            <option value="active">active</option>
-            <option value="disabled">disabled</option>
-            <option value="locked">locked</option>
-          </select>
-        </label>
-        <label>
-          <span>重置密码</span>
-          <input v-model="passwordDrafts[user.id]" type="password" minlength="8" placeholder="留空则不修改" />
-        </label>
-      </div>
+    <!-- 用户列表 -->
+    <div class="users-list">
+      <div v-for="user in users" :key="user.id" class="package-row user-card">
+        
+        <!-- 只读展示模式 -->
+        <template v-if="editingUserId !== user.id">
+          <div class="user-card-head">
+            <div class="user-info-main">
+              <p class="eyebrow">{{ user.username }}</p>
+              <h3>{{ user.display_name }}</h3>
+              <p class="text-muted">{{ user.email || '未设置邮箱' }}</p>
+            </div>
+            <div class="package-meta user-badges">
+              <span class="status-badge" :class="user.status">{{ user.status }}</span>
+              <span class="auth-badge">{{ user.auth_source }}</span>
+            </div>
+          </div>
+          <div class="user-card-footer">
+            <div class="role-tags">
+              <span class="eyebrow">角色:</span>
+              <span v-for="r in user.roles" :key="r" class="role-tag">{{ r }}</span>
+            </div>
+            <button type="button" class="secondary-button" @click="startEdit(user)">编辑用户</button>
+          </div>
+        </template>
 
-      <label class="role-multi-select">
-        <span>角色分配</span>
-        <select v-model="user.roles" multiple size="5">
-          <option v-for="role in roleOptions" :key="role" :value="role">{{ role }}</option>
-        </select>
-      </label>
-
-      <div class="user-actions">
-        <button type="button" class="secondary-button" @click="saveProfile(user)">保存资料</button>
-        <button type="button" class="secondary-button" @click="saveRoles(user)">保存角色</button>
+        <!-- 沉浸式编辑模式 -->
+        <template v-else>
+          <div class="edit-mode-container">
+            <div class="edit-header">
+              <h3>正在编辑: {{ user.username }}</h3>
+              <span class="auth-badge">{{ user.auth_source }}</span>
+            </div>
+            <div class="user-grid">
+              <label>
+                <span>显示名</span>
+                <input v-model="editDraft.display_name" required />
+              </label>
+              <label>
+                <span>邮箱</span>
+                <input v-model="editDraft.email" type="email" />
+              </label>
+              <label>
+                <span>状态</span>
+                <select v-model="editDraft.status">
+                  <option value="active">Active</option>
+                  <option value="disabled">Disabled</option>
+                  <option value="locked">Locked</option>
+                </select>
+              </label>
+              <label>
+                <span>重置密码</span>
+                <input v-model="editPasswordDraft" type="password" minlength="8" placeholder="留空则不修改" />
+              </label>
+            </div>
+            <div class="role-edit-section">
+              <span>角色分配:</span>
+              <!-- 摒弃 Select Multiple 改用易用的 Checkbox -->
+              <div class="checkbox-group">
+                <label v-for="role in roleOptions" :key="role" class="checkbox-label">
+                  <input type="checkbox" :value="role" v-model="editDraft.roles" />
+                  {{ role }}
+                </label>
+              </div>
+            </div>
+            <div class="edit-actions">
+              <button type="button" class="secondary-button" @click="cancelEdit" :disabled="saving">取消</button>
+              <button type="button" @click="saveEdit" :disabled="saving">{{ saving ? '保存中...' : '保存更改' }}</button>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.admin-users-page { max-width: 1320px; }
-.create-user-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.user-card { display: grid; gap: 14px; }
-.user-card-head, .user-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.user-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.user-grid label, .role-multi-select { display: grid; gap: 8px; font-weight: 600; color: #2f403d; }
-.user-grid input, .user-grid select, .role-multi-select select { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; box-sizing: border-box; }
-@media (max-width: 980px) { .create-user-form, .user-grid { grid-template-columns: 1fr; } }
+.admin-users-page {
+  max-width: 1000px; /* 原为1320px，在控制台规范中偏宽，适当收缩 */
+}
+.heading-actions {
+  display: flex;
+  gap: 12px;
+}
+.create-section {
+  margin-bottom: 24px;
+  padding: 24px;
+  background: #f9fbfb;
+  border: 1px solid #bacac5;
+  border-radius: 8px;
+}
+.create-section h3 {
+  margin-top: 0;
+  margin-bottom: 16px;
+  font-size: 1.1em;
+  color: #2f403d;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.full-width {
+  grid-column: 1 / -1;
+}
+.form-grid label, .user-grid label {
+  display: grid;
+  gap: 8px;
+  font-weight: 600;
+  color: #2f403d;
+}
+.form-grid input, .user-grid input, .user-grid select, .form-grid select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #bacac5;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+/* 改善多选控件外观为 checkbox 组 */
+.checkbox-group {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+}
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 6px !important;
+  font-weight: normal !important;
+  cursor: pointer;
+}
+.checkbox-label input {
+  width: auto !important;
+  margin: 0;
+}
+
+.users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.user-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+}
+.user-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.user-info-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.user-info-main h3 {
+  margin: 0;
+  font-size: 1.2em;
+  color: #2f403d;
+}
+.user-info-main p {
+  margin: 0;
+}
+.text-muted {
+  color: #6c7a77;
+  font-size: 0.9em;
+}
+.user-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.status-badge.active { background: #d1f4e0; color: #147a42; }
+.status-badge.disabled { background: #f4d1d1; color: #7a1414; }
+.status-badge.locked { background: #f4e8d1; color: #7a5e14; }
+
+.auth-badge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.8em;
+  background: #e0e8e6;
+  color: #2f403d;
+}
+
+.user-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e0e8e6;
+}
+.role-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.role-tag {
+  background: #eef2f1;
+  border: 1px solid #d4dfdc;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  color: #4a5c58;
+}
+
+/* 编辑模式专区容器样式 */
+.edit-mode-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.edit-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #e0e8e6;
+  padding-bottom: 12px;
+}
+.edit-header h3 {
+  margin: 0;
+  color: #2f403d;
+}
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.role-edit-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+  color: #2f403d;
+  margin-top: 8px;
+}
+.edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+@media (max-width: 768px) {
+  .form-grid, .user-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

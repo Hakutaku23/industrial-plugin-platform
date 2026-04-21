@@ -37,6 +37,7 @@ const editingDataSourceId = ref<number | null>(null)
 const error = ref('')
 const form = ref(defaultForm())
 const points = ref<PointRow[]>(defaultPoints())
+const showForm = ref(false) // 核心：用于控制列表和表单的切换展示
 
 function defaultForm() {
   return {
@@ -59,7 +60,7 @@ function defaultForm() {
 }
 
 function defaultPoints(): PointRow[] {
-  return [
+  return[
     {
       pointClass: 'demo',
       readEnabled: true,
@@ -76,6 +77,16 @@ function resetForm() {
   form.value = defaultForm()
   points.value = defaultPoints()
   error.value = ''
+  showForm.value = false
+}
+
+function handleCreate() {
+  resetForm()
+  showForm.value = true
+}
+
+function cancelEdit() {
+  resetForm()
 }
 
 function isTdengineForm() {
@@ -247,7 +258,7 @@ function buildConfig() {
       points: Object.fromEntries(
         normalizedPoints
           .filter((point) => point.canRead && point.readTag)
-          .map((point) => [point.readTag, parseMockValue(point.mockValue)]),
+          .map((point) =>[point.readTag, parseMockValue(point.mockValue)]),
       ),
       pointCatalog,
       readTags,
@@ -265,7 +276,7 @@ function buildConfig() {
       timezone: form.value.tdengineTimezone.trim() || 'Asia/Shanghai',
       pointCatalog,
       readTags,
-      writeTags: [],
+      writeTags:[],
       return_type: 'dataframe',
     }
   }
@@ -334,7 +345,7 @@ async function remove(source: DataSourceRecord) {
 
 function pointCatalog(source: DataSourceRecord): PointCatalogView[] {
   const configured = source.config.pointCatalog ?? source.config.point_catalog
-  return Array.isArray(configured) ? configured.filter(isRecord) : []
+  return Array.isArray(configured) ? configured.filter(isRecord) :[]
 }
 
 function pointClass(point: PointCatalogView) {
@@ -402,13 +413,13 @@ function buildPointRowsFromSource(source: DataSourceRecord): PointRow[] {
   const readTags = Array.isArray(source.config.readTags)
     ? source.config.readTags
     : Array.isArray(source.config.read_tags)
-      ? source.config.read_tags
-      : []
+    ? source.config.read_tags
+    :[]
   const writeTags = Array.isArray(source.config.writeTags)
     ? source.config.writeTags
     : Array.isArray(source.config.write_tags)
-      ? source.config.write_tags
-      : []
+    ? source.config.write_tags
+    :[]
   const tags = Array.from(
     new Set(
       [...readTags, ...writeTags]
@@ -451,6 +462,7 @@ function edit(source: DataSourceRecord) {
   points.value = buildPointRowsFromSource(source)
   applyConnectorTypeRules()
   error.value = ''
+  showForm.value = true
 }
 
 onMounted(() => {
@@ -467,14 +479,20 @@ onMounted(() => {
         <h2>数据源与位点</h2>
         <p>配置 Mock、Redis 或 TDEngine 数据源。TDEngine 当前只做历史只读数据源配置，查询时间范围和返回内容后续在实例运行界面输入。</p>
       </div>
-      <button type="button" class="secondary-button" @click="loadDataSources" :disabled="loading">
-        {{ loading ? '刷新中' : '刷新' }}
-      </button>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <button type="button" class="secondary-button" @click="loadDataSources" :disabled="loading" v-if="!showForm">
+          {{ loading ? '刷新中' : '刷新' }}
+        </button>
+        <button type="button" @click="handleCreate" v-if="!showForm">
+          新增数据源
+        </button>
+      </div>
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
 
-    <form class="config-form" @submit.prevent="submit">
+    <!-- 视图 1: 表单模式 -->
+    <form v-if="showForm" class="config-form" @submit.prevent="submit">
       <label>
         名称
         <input v-model="form.name" />
@@ -608,35 +626,42 @@ onMounted(() => {
         <button type="submit" :disabled="saving">
           {{ saving ? '保存中' : editingDataSourceId === null ? '保存数据源' : '保存修改' }}
         </button>
-        <button v-if="editingDataSourceId !== null" type="button" class="secondary-button" @click="resetForm">
-          取消编辑
+        <button type="button" class="secondary-button" @click="cancelEdit">
+          取消
         </button>
       </div>
     </form>
 
-    <div v-for="source in dataSources" :key="source.id" class="package-row">
-      <div class="package-main">
-        <div>
-          <p class="eyebrow">{{ source.connector_type }}</p>
-          <h3>{{ source.name }}</h3>
-          <p>{{ source.read_enabled ? '数据源可读取' : '数据源不可读取' }} · {{ source.write_enabled ? '数据源可回写' : '数据源不可回写' }}</p>
-        </div>
-        <div class="package-meta">
-          <span>{{ source.status }}</span>
-        </div>
+    <!-- 视图 2: 数据源列表模式 -->
+    <div v-else>
+      <div v-if="dataSources.length === 0 && !loading" class="muted" style="padding: 2rem 0; text-align: center;">
+        暂无数据源配置，请点击右上角新增。
       </div>
-      <div class="row-actions">
-        <button type="button" class="secondary-button" @click="edit(source)">修改</button>
-        <button type="button" class="danger-button" @click="remove(source)">删除</button>
-      </div>
-      <div v-if="pointCatalog(source).length > 0" class="point-list">
-        <div v-for="(point, index) in pointCatalog(source)" :key="index" class="point-summary">
-          <strong>{{ pointClass(point) }}</strong>
-          <span>{{ canRead(point) ? `读：${readTag(point) || '未填'}` : '不可读' }}</span>
-          <span>{{ canWrite(point) ? `写：${writeTag(point) || '未填'}` : '不可写' }}</span>
+      
+      <div v-for="source in dataSources" :key="source.id" class="package-row">
+        <div class="package-main">
+          <div>
+            <p class="eyebrow">{{ source.connector_type }}</p>
+            <h3>{{ source.name }}</h3>
+            <p>{{ source.read_enabled ? '数据源可读取' : '数据源不可读取' }} · {{ source.write_enabled ? '数据源可回写' : '数据源不可回写' }}</p>
+          </div>
+          <div class="package-meta">
+            <span>{{ source.status }}</span>
+          </div>
         </div>
+        <div class="row-actions">
+          <button type="button" class="secondary-button" @click="edit(source)">修改</button>
+          <button type="button" class="danger-button" @click="remove(source)">删除</button>
+        </div>
+        <div v-if="pointCatalog(source).length > 0" class="point-list">
+          <div v-for="(point, index) in pointCatalog(source)" :key="index" class="point-summary">
+            <strong>{{ pointClass(point) }}</strong>
+            <span>{{ canRead(point) ? `读：${readTag(point) || '未填'}` : '不可读' }}</span>
+            <span>{{ canWrite(point) ? `写：${writeTag(point) || '未填'}` : '不可写' }}</span>
+          </div>
+        </div>
+        <pre>{{ stringify(source.config) }}</pre>
       </div>
-      <pre>{{ stringify(source.config) }}</pre>
     </div>
   </section>
 </template>

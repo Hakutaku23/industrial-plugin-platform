@@ -37,7 +37,36 @@ const writebacks = ref<WritebackRecord[]>([])
 const detailLoading = ref(false)
 const detailError = ref('')
 
-const statusOptions = ['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'TIMED_OUT', 'SKIPPED']
+const statusOptions =['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'TIMED_OUT', 'SKIPPED']
+
+// =======================
+// 新增的 UI 交互状态
+// =======================
+const isDrawerOpen = ref(false)
+const showObservability = ref(false)
+
+function getStatusClass(status: string) {
+  if (!status) return 'badge-default';
+  const s = status.toUpperCase();
+  if (s === 'COMPLETED') return 'badge-success';
+  if (s === 'FAILED' || s === 'ERROR') return 'badge-error';
+  if (s === 'PARTIAL_SUCCESS' || s === 'TIMED_OUT') return 'badge-warning';
+  if (s === 'SKIPPED') return 'badge-skipped';
+  return 'badge-default';
+}
+
+function getLogLevelClass(level: string) {
+  const l = (level || '').toUpperCase();
+  if (l === 'ERROR' || l === 'FATAL') return 'badge-error';
+  if (l === 'WARN' || l === 'WARNING') return 'badge-warning';
+  if (l === 'INFO') return 'badge-success';
+  return 'badge-default';
+}
+
+function closeDrawer() {
+  isDrawerOpen.value = false;
+}
+// =======================
 
 type SchedulerStatusRecord = {
   enabled: boolean
@@ -118,7 +147,6 @@ async function refreshAll() {
   await Promise.all([loadRuns(), loadObservability()])
 }
 
-
 async function loadOptions() {
   optionsLoading.value = true
   try {
@@ -142,7 +170,8 @@ async function loadRuns() {
     if (runs.value.length === 0) {
       selectedRunId.value = null
       logs.value = []
-      writebacks.value = []
+      writebacks.value =[]
+      isDrawerOpen.value = false
       return
     }
 
@@ -175,7 +204,7 @@ const filteredRuns = computed(() => {
     if (!keyword) {
       return true
     }
-    return [
+    return[
       run.run_id,
       run.package_name,
       run.version,
@@ -225,8 +254,8 @@ watch(currentPage, () => {
 })
 
 watch(selectedRunId, async (runId) => {
-  logs.value = []
-  writebacks.value = []
+  logs.value =[]
+  writebacks.value =[]
   detailError.value = ''
   detailTab.value = 'overview'
 
@@ -251,6 +280,7 @@ watch(selectedRunId, async (runId) => {
 
 function selectRun(runId: string) {
   selectedRunId.value = runId
+  isDrawerOpen.value = true
 }
 
 function goToPage(page: number) {
@@ -310,305 +340,790 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="panel run-page">
-    <div class="intro page-heading">
-      <div>
-        <p class="eyebrow">Runs</p>
-        <h2>运行记录</h2>
-        <p>以查询表方式查看运行概要。点击某一条记录后，再在右侧查看完整详情。</p>
+  <div class="run-page-container">
+    <!-- Header Area -->
+    <header class="page-header">
+      <div class="header-titles">
+        <h1 class="page-title">运行记录</h1>
+        <p class="page-subtitle">监控与查看插件和实例的执行历史。点击表格中的任意记录即可在右侧查看详情。</p>
       </div>
-      <button type="button" class="secondary-button" @click="refreshAll" :disabled="loading || optionsLoading">
-        {{ loading ? '刷新中' : '刷新' }}
-      </button>
-    </div>
-
-    <section class="observability-grid">
-      <article class="obs-card">
-        <div class="obs-head">
-          <strong>调度器状态</strong>
-          <span v-if="observabilityLoading" class="muted">刷新中</span>
-        </div>
-        <p v-if="observabilityError" class="error">{{ observabilityError }}</p>
-        <div v-else-if="schedulerStatus" class="status-grid">
-          <div><span>线程存活</span><strong>{{ schedulerStatus.thread_alive ? 'Yes' : 'No' }}</strong></div>
-          <div><span>轮询间隔</span><strong>{{ schedulerStatus.poll_interval_sec }} s</strong></div>
-          <div><span>工作线程</span><strong>{{ schedulerStatus.max_workers }}</strong></div>
-          <div><span>执行中</span><strong>{{ schedulerStatus.inflight_tasks }}</strong></div>
-          <div><span>活跃锁</span><strong>{{ schedulerStatus.active_lock_count }}</strong></div>
-          <div><span>连续失败</span><strong>{{ schedulerStatus.consecutive_failures }}</strong></div>
-        </div>
-        <p v-if="schedulerStatus?.lock_observation_error" class="muted">锁扫描异常：{{ schedulerStatus.lock_observation_error }}</p>
-        <p v-if="schedulerStatus?.last_error" class="muted">最近错误：{{ schedulerStatus.last_error }}</p>
-      </article>
-
-      <article class="obs-card">
-        <div class="obs-head">
-          <strong>Redis 活跃锁</strong>
-          <span class="muted">{{ schedulerLocks.length }} 条</span>
-        </div>
-        <div v-if="schedulerLocks.length === 0" class="empty-inline">当前无活跃实例锁</div>
-        <div v-else class="lock-list">
-          <div v-for="item in schedulerLocks" :key="item.key" class="lock-row">
-            <div><span>实例</span><strong>{{ item.instance_id ?? '-' }}</strong></div>
-            <div><span>TTL</span><strong>{{ formatTtl(item.ttl_sec) }}</strong></div>
-            <div class="wide"><span>Key</span><strong>{{ item.key }}</strong></div>
-          </div>
-        </div>
-      </article>
-
-      <article class="obs-card obs-card-wide">
-        <div class="obs-head">
-          <strong>最近调度 / 锁 / 连接器事件</strong>
-          <span class="muted">{{ auditEvents.length }} 条</span>
-        </div>
-        <div v-if="auditEvents.length === 0" class="empty-inline">暂无相关审计事件</div>
-        <div v-else class="audit-list">
-          <div v-for="item in auditEvents" :key="item.id" class="audit-row">
-            <div class="audit-meta">
-              <strong>{{ item.event_type }}</strong>
-              <span>{{ item.target_type }} / {{ item.target_id }}</span>
-              <span>{{ formatTime(item.created_at) }}</span>
-            </div>
-            <p class="muted">{{ auditSummary(item) }}</p>
-          </div>
-        </div>
-      </article>
-    </section>
-
-    <form class="run-filter-form" @submit.prevent="loadRuns">
-      <label>
-        包名
-        <select v-model="packageFilter" :disabled="optionsLoading">
-          <option value="">全部</option>
-          <option v-for="item in packages" :key="item.id" :value="item.name">
-            {{ item.name }}
-          </option>
-        </select>
-      </label>
-
-      <label>
-        实例
-        <select v-model="instanceFilter" :disabled="optionsLoading">
-          <option value="">全部</option>
-          <option v-for="item in instances" :key="item.id" :value="String(item.id)">
-            {{ item.name }} (#{{ item.id }})
-          </option>
-        </select>
-      </label>
-
-      <label>
-        状态
-        <select v-model="statusFilter">
-          <option value="">全部</option>
-          <option v-for="item in statusOptions" :key="item" :value="item">
-            {{ item }}
-          </option>
-        </select>
-      </label>
-
-      <label class="wide-field">
-        关键字
-        <input
-          v-model="keywordFilter"
-          type="text"
-          placeholder="可搜索 run_id / package / version / trigger / environment / instance"
-        />
-      </label>
-
-      <div class="run-filter-actions">
-        <button type="submit" :disabled="loading">查询</button>
-        <button type="button" class="secondary-button" @click="resetFilters" :disabled="loading">
-          重置
+      <div class="header-actions">
+        <button class="btn btn-outline" @click="showObservability = !showObservability">
+          {{ showObservability ? '收起系统状态' : '查看系统状态' }}
         </button>
+        <button class="btn btn-primary" @click="refreshAll" :disabled="loading || optionsLoading">
+          <svg v-if="loading" class="spinner icon-loading" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          {{ loading ? '刷新中...' : '刷新' }}
+        </button>
+      </div>
+    </header>
+
+    <!-- Collapsible Observability Status -->
+    <transition name="fade-slide">
+      <section v-if="showObservability" class="observability-section">
+        <article class="obs-card">
+          <div class="obs-head">
+            <strong>调度器状态</strong>
+            <span v-if="observabilityLoading" class="text-muted">刷新中</span>
+          </div>
+          <p v-if="observabilityError" class="text-error">{{ observabilityError }}</p>
+          <div v-else-if="schedulerStatus" class="status-grid">
+            <div class="status-item"><span>线程存活</span><strong>{{ schedulerStatus.thread_alive ? 'Yes' : 'No' }}</strong></div>
+            <div class="status-item"><span>轮询间隔</span><strong>{{ schedulerStatus.poll_interval_sec }} s</strong></div>
+            <div class="status-item"><span>工作线程</span><strong>{{ schedulerStatus.max_workers }}</strong></div>
+            <div class="status-item"><span>执行中</span><strong>{{ schedulerStatus.inflight_tasks }}</strong></div>
+            <div class="status-item"><span>活跃锁</span><strong>{{ schedulerStatus.active_lock_count }}</strong></div>
+            <div class="status-item"><span>连续失败</span><strong>{{ schedulerStatus.consecutive_failures }}</strong></div>
+          </div>
+          <p v-if="schedulerStatus?.lock_observation_error" class="text-muted mt-3">锁扫描异常：{{ schedulerStatus.lock_observation_error }}</p>
+          <p v-if="schedulerStatus?.last_error" class="text-muted mt-2">最近错误：{{ schedulerStatus.last_error }}</p>
+        </article>
+
+        <article class="obs-card">
+          <div class="obs-head">
+            <strong>Redis 活跃锁</strong>
+            <span class="text-muted badge">{{ schedulerLocks.length }} 条</span>
+          </div>
+          <div v-if="schedulerLocks.length === 0" class="empty-inline">当前无活跃实例锁</div>
+          <div v-else class="lock-list">
+            <div v-for="item in schedulerLocks" :key="item.key" class="lock-row">
+              <div class="lock-col"><span>实例</span><strong>{{ item.instance_id ?? '-' }}</strong></div>
+              <div class="lock-col"><span>TTL</span><strong>{{ formatTtl(item.ttl_sec) }}</strong></div>
+              <div class="lock-col wide"><span>Key</span><strong>{{ item.key }}</strong></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="obs-card obs-card-wide">
+          <div class="obs-head">
+            <strong>最近调度 / 锁 / 连接器事件</strong>
+            <span class="text-muted badge">{{ auditEvents.length }} 条</span>
+          </div>
+          <div v-if="auditEvents.length === 0" class="empty-inline">暂无相关审计事件</div>
+          <div v-else class="audit-list">
+            <div v-for="item in auditEvents" :key="item.id" class="audit-row">
+              <div class="audit-meta">
+                <strong class="text-main">{{ item.event_type }}</strong>
+                <span>{{ item.target_type }} / {{ item.target_id }}</span>
+                <span>{{ formatTime(item.created_at) }}</span>
+              </div>
+              <p class="text-muted audit-summary">{{ auditSummary(item) }}</p>
+            </div>
+          </div>
+        </article>
+      </section>
+    </transition>
+
+    <!-- Filters Bar -->
+    <form class="filter-bar" @submit.prevent="loadRuns">
+      <div class="filter-group">
+        <label>包名 (Package)</label>
+        <select v-model="packageFilter" :disabled="optionsLoading" class="form-control">
+          <option value="">全部包</option>
+          <option v-for="item in packages" :key="item.id" :value="item.name">{{ item.name }}</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label>实例 (Instance)</label>
+        <select v-model="instanceFilter" :disabled="optionsLoading" class="form-control">
+          <option value="">全部实例</option>
+          <option v-for="item in instances" :key="item.id" :value="String(item.id)">{{ item.name }} (#{{ item.id }})</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label>状态 (Status)</label>
+        <select v-model="statusFilter" class="form-control">
+          <option value="">全部状态</option>
+          <option v-for="item in statusOptions" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </div>
+
+      <div class="filter-group wide-field">
+        <label>关键字搜索</label>
+        <input v-model="keywordFilter" type="text" class="form-control" placeholder="支持 run_id / package / trigger 等" />
+      </div>
+
+      <div class="filter-actions">
+        <button type="submit" class="btn btn-primary" :disabled="loading">查询</button>
+        <button type="button" class="btn btn-outline" @click="resetFilters" :disabled="loading">重置</button>
       </div>
     </form>
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="loading" class="muted">正在加载运行记录。</p>
+    <p v-if="error" class="text-error mb-4">{{ error }}</p>
 
+    <!-- Main Table Area -->
     <div v-if="!loading && filteredRuns.length === 0" class="empty-state">
+      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#cbd5e1" class="mb-4">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+      </svg>
       <h3>暂无运行记录</h3>
-      <p>调整筛选条件，或先执行一次插件 / 实例运行。</p>
+      <p>调整筛选条件，或先执行一次插件/实例运行以生成数据。</p>
     </div>
 
-    <div v-else class="run-layout">
-      <div class="run-table-card">
-        <div class="run-table-meta">
-          <strong>查询结果</strong>
-          <span class="muted">共 {{ filteredRuns.length }} 条 · 每页 {{ PAGE_SIZE }} 条</span>
-        </div>
-
-        <div class="table-wrapper">
-          <table class="runs-table">
-            <thead>
-              <tr>
-                <th>Run ID</th>
-                <th>包名</th>
-                <th>版本</th>
-                <th>实例</th>
-                <th>触发方式</th>
-                <th>状态</th>
-                <th>开始时间</th>
-                <th>耗时</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="run in pagedRuns"
-                :key="run.run_id"
-                class="run-table-row"
-                :class="{ active: run.run_id === selectedRunId }"
-                @click="selectRun(run.run_id)"
-              >
-                <td><code>{{ run.run_id }}</code></td>
-                <td>{{ run.package_name }}</td>
-                <td>{{ run.version }}</td>
-                <td>{{ instanceLabel(run) }}</td>
-                <td>{{ run.trigger_type }}</td>
-                <td><span class="status-chip">{{ run.status }}</span></td>
-                <td>{{ formatTime(run.started_at) }}</td>
-                <td>{{ formatDuration(run.started_at, run.finished_at) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="pagination-bar" v-if="filteredRuns.length > PAGE_SIZE">
-          <button type="button" class="secondary-button" @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1">
-            上一页
-          </button>
-          <span class="muted">第 {{ currentPage }} / {{ totalPages }} 页</span>
-          <button type="button" class="secondary-button" @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages">
-            下一页
-          </button>
-        </div>
+    <div v-else class="table-container">
+      <div class="table-scroll">
+        <table class="runs-table">
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>包名</th>
+              <th>版本</th>
+              <th>实例</th>
+              <th>触发方式</th>
+              <th>状态</th>
+              <th>开始时间</th>
+              <th>耗时</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="run in pagedRuns"
+              :key="run.run_id"
+              class="run-table-row"
+              :class="{ active: run.run_id === selectedRunId && isDrawerOpen }"
+              @click="selectRun(run.run_id)"
+            >
+              <td class="font-mono">{{ run.run_id.split('-')[0] }}...</td>
+              <td class="font-medium">{{ run.package_name }}</td>
+              <td>{{ run.version }}</td>
+              <td>{{ instanceLabel(run) }}</td>
+              <td><span class="badge badge-default">{{ run.trigger_type }}</span></td>
+              <td><span :class="['badge', getStatusClass(run.status)]">{{ run.status }}</span></td>
+              <td class="text-muted">{{ formatTime(run.started_at) }}</td>
+              <td>{{ formatDuration(run.started_at, run.finished_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <aside class="run-detail-card" v-if="selectedRun">
-        <div class="run-detail-head">
-          <div>
-            <p class="eyebrow">{{ selectedRun.run_id }}</p>
-            <h3>{{ selectedRun.package_name }} @ {{ selectedRun.version }}</h3>
+      <!-- Pagination -->
+      <div class="pagination-bar" v-if="filteredRuns.length > PAGE_SIZE">
+        <span class="text-muted">共 {{ filteredRuns.length }} 条记录</span>
+        <div class="pagination-actions">
+          <button type="button" class="btn btn-outline btn-sm" @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1">上一页</button>
+          <span class="page-info">第 {{ currentPage }} / {{ totalPages }} 页</span>
+          <button type="button" class="btn btn-outline btn-sm" @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages">下一页</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================== -->
+    <!-- Drawer: Overlay & Detail Panel -->
+    <!-- ============================================== -->
+    <transition name="fade">
+      <div v-if="isDrawerOpen" class="drawer-overlay" @click="closeDrawer"></div>
+    </transition>
+
+    <transition name="slide-right">
+      <aside v-if="isDrawerOpen && selectedRun" class="detail-drawer">
+        <!-- Drawer Header -->
+        <div class="drawer-header">
+          <div class="drawer-title-group">
+            <span class="eyebrow">Run ID: {{ selectedRun.run_id }}</span>
+            <h3>{{ selectedRun.package_name }} <span class="text-muted text-sm font-normal">@ {{ selectedRun.version }}</span></h3>
             <p>
-              {{ selectedRun.trigger_type }} · {{ selectedRun.environment }} · attempt {{ selectedRun.attempt }}
+              触发: <strong>{{ selectedRun.trigger_type }}</strong> · 环境: <strong>{{ selectedRun.environment }}</strong> · 尝试: <strong>{{ selectedRun.attempt }}</strong>
             </p>
           </div>
-          <span class="status-chip">{{ selectedRun.status }}</span>
-        </div>
-
-        <div class="detail-tabs">
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">概览</button>
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'inputs' }" @click="detailTab = 'inputs'">Inputs</button>
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'outputs' }" @click="detailTab = 'outputs'">Outputs</button>
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'metrics' }" @click="detailTab = 'metrics'">Metrics</button>
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'error' }" @click="detailTab = 'error'">Error</button>
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'logs' }" @click="detailTab = 'logs'">Logs</button>
-          <button type="button" class="detail-tab" :class="{ active: detailTab === 'writeback' }" @click="detailTab = 'writeback'">Writeback</button>
-        </div>
-
-        <p v-if="detailError" class="error">{{ detailError }}</p>
-        <p v-if="detailLoading" class="muted">正在加载详情。</p>
-
-        <div v-if="detailTab === 'overview'" class="detail-panel">
-          <div class="status-grid">
-            <div><span>实例 ID</span><strong>{{ instanceLabel(selectedRun) }}</strong></div>
-            <div><span>状态</span><strong>{{ selectedRun.status }}</strong></div>
-            <div><span>开始时间</span><strong>{{ formatTime(selectedRun.started_at) }}</strong></div>
-            <div><span>结束时间</span><strong>{{ formatTime(selectedRun.finished_at) }}</strong></div>
-            <div><span>环境</span><strong>{{ selectedRun.environment }}</strong></div>
-            <div><span>耗时</span><strong>{{ formatDuration(selectedRun.started_at, selectedRun.finished_at) }}</strong></div>
+          <div class="drawer-header-actions">
+            <span :class="['badge', getStatusClass(selectedRun.status)]">{{ selectedRun.status }}</span>
+            <button class="icon-btn" @click="closeDrawer" title="关闭详情">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
           </div>
         </div>
 
-        <div v-else-if="detailTab === 'inputs'" class="detail-panel"><pre class="detail-pre">{{ stringify(selectedRun.inputs) }}</pre></div>
-        <div v-else-if="detailTab === 'outputs'" class="detail-panel"><pre class="detail-pre">{{ stringify(selectedRun.outputs) }}</pre></div>
-        <div v-else-if="detailTab === 'metrics'" class="detail-panel"><pre class="detail-pre">{{ stringify(selectedRun.metrics) }}</pre></div>
-        <div v-else-if="detailTab === 'error'" class="detail-panel"><pre class="detail-pre">{{ stringify(selectedRun.error) }}</pre></div>
+        <!-- Drawer Navigation Tabs -->
+        <div class="drawer-tabs">
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">概览</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'inputs' }" @click="detailTab = 'inputs'">Inputs</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'outputs' }" @click="detailTab = 'outputs'">Outputs</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'metrics' }" @click="detailTab = 'metrics'">Metrics</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'error' }" @click="detailTab = 'error'">Error</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'logs' }" @click="detailTab = 'logs'">Logs</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'writeback' }" @click="detailTab = 'writeback'">Writeback</button>
+        </div>
 
-        <div v-else-if="detailTab === 'logs'" class="detail-panel">
-          <div v-if="logs.length === 0" class="empty-inline">暂无日志</div>
-          <div v-else class="log-list">
-            <div v-for="item in logs" :key="item.id" class="log-row">
-              <div class="log-meta">
-                <strong>{{ item.level }}</strong>
-                <span>{{ item.source }}</span>
-                <span>{{ formatTime(item.created_at) }}</span>
-              </div>
-              <pre class="detail-pre compact">{{ item.message }}</pre>
+        <!-- Drawer Content Area -->
+        <div class="drawer-body">
+          <p v-if="detailError" class="text-error mb-4">{{ detailError }}</p>
+          <div v-if="detailLoading" class="loading-state">
+             <svg class="spinner icon-loading mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+             正在加载详情...
+          </div>
+
+          <div v-else>
+            <div v-if="detailTab === 'overview'" class="overview-grid">
+              <div class="info-box"><span>实例 ID</span><strong>{{ instanceLabel(selectedRun) }}</strong></div>
+              <div class="info-box"><span>状态</span><strong :class="['text-' + getStatusClass(selectedRun.status).replace('badge-', '')]">{{ selectedRun.status }}</strong></div>
+              <div class="info-box"><span>开始时间</span><strong>{{ formatTime(selectedRun.started_at) }}</strong></div>
+              <div class="info-box"><span>结束时间</span><strong>{{ formatTime(selectedRun.finished_at) }}</strong></div>
+              <div class="info-box"><span>环境</span><strong>{{ selectedRun.environment }}</strong></div>
+              <div class="info-box"><span>耗时</span><strong>{{ formatDuration(selectedRun.started_at, selectedRun.finished_at) }}</strong></div>
             </div>
-          </div>
-        </div>
 
-        <div v-else-if="detailTab === 'writeback'" class="detail-panel">
-          <div v-if="writebacks.length === 0" class="empty-inline">暂无写回记录</div>
-          <div v-else class="writeback-list">
-            <div v-for="item in writebacks" :key="item.id" class="writeback-row">
-              <div class="writeback-head">
-                <strong>{{ item.output_name }}</strong>
-                <span class="status-chip">{{ item.status }}</span>
+            <div v-else-if="detailTab === 'inputs'"><pre class="code-block">{{ stringify(selectedRun.inputs) }}</pre></div>
+            <div v-else-if="detailTab === 'outputs'"><pre class="code-block">{{ stringify(selectedRun.outputs) }}</pre></div>
+            <div v-else-if="detailTab === 'metrics'"><pre class="code-block">{{ stringify(selectedRun.metrics) }}</pre></div>
+            <div v-else-if="detailTab === 'error'"><pre class="code-block error-block">{{ stringify(selectedRun.error) }}</pre></div>
+
+            <div v-else-if="detailTab === 'logs'">
+              <div v-if="logs.length === 0" class="empty-inline">暂无日志</div>
+              <div v-else class="log-container">
+                <div v-for="item in logs" :key="item.id" class="log-card">
+                  <div class="log-header">
+                    <span :class="['badge', getLogLevelClass(item.level)]">{{ item.level }}</span>
+                    <span class="text-muted font-mono text-xs">{{ item.source }}</span>
+                    <span class="text-muted text-xs ml-auto">{{ formatTime(item.created_at) }}</span>
+                  </div>
+                  <pre class="code-block compact">{{ item.message }}</pre>
+                </div>
               </div>
-              <div class="writeback-grid">
-                <div><span>目标数据源</span><strong>#{{ item.data_source_id }}</strong></div>
-                <div><span>目标标签</span><strong>{{ item.target_tag }}</strong></div>
-                <div><span>Dry Run</span><strong>{{ item.dry_run ? 'Yes' : 'No' }}</strong></div>
-                <div><span>时间</span><strong>{{ formatTime(item.created_at) }}</strong></div>
+            </div>
+
+            <div v-else-if="detailTab === 'writeback'">
+              <div v-if="writebacks.length === 0" class="empty-inline">暂无写回记录</div>
+              <div v-else class="writeback-container">
+                <div v-for="item in writebacks" :key="item.id" class="writeback-card">
+                  <div class="writeback-header">
+                    <strong>{{ item.output_name }}</strong>
+                    <span :class="['badge', getStatusClass(item.status)]">{{ item.status }}</span>
+                  </div>
+                  <div class="writeback-grid">
+                    <div class="wb-info"><span>目标数据源</span><strong>#{{ item.data_source_id }}</strong></div>
+                    <div class="wb-info"><span>目标标签</span><strong class="font-mono">{{ item.target_tag }}</strong></div>
+                    <div class="wb-info"><span>Dry Run</span><strong>{{ item.dry_run ? 'Yes' : 'No' }}</strong></div>
+                    <div class="wb-info"><span>时间</span><strong>{{ formatTime(item.created_at) }}</strong></div>
+                  </div>
+                  <pre class="code-block compact mt-3">{{ stringify(item.value) }}</pre>
+                  <p v-if="item.reason" class="text-muted mt-2 text-sm">原因：{{ item.reason }}</p>
+                </div>
               </div>
-              <pre class="detail-pre compact">{{ stringify(item.value) }}</pre>
-              <p v-if="item.reason" class="muted">原因：{{ item.reason }}</p>
             </div>
           </div>
         </div>
       </aside>
-    </div>
-  </section>
+    </transition>
+  </div>
 </template>
 
 <style scoped>
-.run-page { max-width: 1360px; }
-.observability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
-.obs-card { padding: 18px; background: #ffffff; border: 1px solid #d8e3df; border-radius: 8px; display: grid; gap: 12px; }
-.obs-card-wide { grid-column: 1 / -1; }
-.obs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.lock-list, .audit-list { display: grid; gap: 10px; }
-.lock-row, .audit-row { display: grid; gap: 8px; padding: 12px; background: #fbfdfc; border: 1px solid #d8e3df; border-radius: 8px; }
-.lock-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.lock-row .wide { grid-column: 1 / -1; }
-.lock-row span, .audit-meta span { color: #5e6f6c; font-size: 13px; }
-.audit-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-.run-filter-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 20px; background: #ffffff; border: 1px solid #d8e3df; border-radius: 8px; }
-.run-filter-form label { display: grid; gap: 8px; color: #2f403d; font-weight: 600; }
-.run-filter-form input, .run-filter-form select { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; }
-.run-filter-actions { display: flex; align-items: flex-end; gap: 10px; }
-.run-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.9fr); gap: 20px; margin-top: 20px; }
-.run-table-card, .run-detail-card { padding: 20px; background: #ffffff; border: 1px solid #d8e3df; border-radius: 8px; }
-.run-table-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.table-wrapper { overflow: auto; }
-.runs-table { width: 100%; border-collapse: collapse; min-width: 900px; }
-.runs-table th, .runs-table td { padding: 12px 10px; border-bottom: 1px solid #e4ece9; text-align: left; vertical-align: top; }
-.runs-table thead th { color: #5e6f6c; font-size: 13px; font-weight: 700; background: #f7faf9; position: sticky; top: 0; }
-.run-table-row { cursor: pointer; }
-.run-table-row:hover { background: #f7faf9; }
-.run-table-row.active { background: #edf5f2; }
-.status-chip { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 4px 8px; color: #2f403d; background: #edf5f2; border: 1px solid #d8e3df; border-radius: 999px; font-size: 12px; font-weight: 700; }
-.pagination-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px; }
-.run-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.run-detail-head p:last-child { margin-bottom: 0; color: #41524f; }
-.detail-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-.detail-tab { min-height: 34px; padding: 0 12px; color: #12685f; background: #ffffff; border: 1px solid #9db8b1; border-radius: 6px; font-weight: 700; }
-.detail-tab.active { color: #ffffff; background: #12685f; border-color: #12685f; }
-.detail-panel { display: grid; gap: 12px; }
-.detail-pre { max-width: 100%; margin: 0; padding: 12px; overflow: auto; color: #172126; background: #f5f8f7; border: 1px solid #d8e3df; border-radius: 6px; }
-.detail-pre.compact { max-height: 200px; }
-.empty-inline { padding: 14px; color: #5e6f6c; background: #f7faf9; border: 1px dashed #c9d7d3; border-radius: 6px; }
-.log-list, .writeback-list { display: grid; gap: 12px; }
-.log-row, .writeback-row { display: grid; gap: 10px; padding: 12px; background: #fbfdfc; border: 1px solid #d8e3df; border-radius: 8px; }
-.log-meta, .writeback-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-.log-meta span { color: #5e6f6c; font-size: 13px; }
-.writeback-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.writeback-grid div { display: grid; gap: 4px; padding: 10px; background: #f5f8f7; border: 1px solid #d8e3df; border-radius: 6px; }
-.writeback-grid span { color: #5e6f6c; font-size: 13px; }
+/* ========================================================
+   1. Base Setup & Typography
+   ======================================================== */
+.run-page-container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #0f172a;
+}
+.text-muted { color: #64748b; }
+.text-main { color: #334155; }
+.text-error { color: #dc2626; }
+.text-success { color: #16a34a; }
+.text-warning { color: #d97706; }
+.text-sm { font-size: 13px; }
+.font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.font-medium { font-weight: 500; }
+.mb-4 { margin-bottom: 16px; }
+.mt-3 { margin-top: 12px; }
+.mt-2 { margin-top: 8px; }
+.ml-auto { margin-left: auto; }
+
+/* ========================================================
+   2. Header & Top Level
+   ======================================================== */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 24px;
+}
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+  color: #0f172a;
+}
+.page-subtitle {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* ========================================================
+   3. Buttons
+   ======================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  outline: none;
+}
+.btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+}
+.btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+.btn-outline {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #334155;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.btn-outline:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: background 0.2s, color 0.2s;
+}
+.icon-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+/* ========================================================
+   4. Status Badges
+   ======================================================== */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.badge-success { background: #dcfce7; color: #166534; }
+.badge-error { background: #fee2e2; color: #991b1b; }
+.badge-warning { background: #fef9c3; color: #854d0e; }
+.badge-skipped { background: #f1f5f9; color: #475569; }
+.badge-default { background: #e0e7ff; color: #3730a3; }
+
+/* ========================================================
+   5. Observability Section
+   ======================================================== */
+.observability-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.obs-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+.obs-card-wide {
+  grid-column: 1 / -1;
+}
+.obs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.obs-head strong { font-size: 15px; }
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #f8fafc;
+  padding: 12px;
+  border-radius: 8px;
+}
+.status-item span { font-size: 12px; color: #64748b; }
+.status-item strong { font-size: 14px; color: #334155; }
+.lock-list, .audit-list { display: grid; gap: 12px; }
+.lock-row, .audit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.lock-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+}
+.lock-col.wide { flex: 1; }
+.lock-col span { font-size: 12px; color: #64748b; }
+.lock-col strong { font-size: 13px; color: #334155; }
+.audit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  width: 100%;
+}
+.audit-summary { margin: 0; font-size: 13px; }
+
+/* ========================================================
+   6. Filters Bar
+   ======================================================== */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  background: #ffffff;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 160px;
+}
+.filter-group.wide-field {
+  flex: 2;
+  min-width: 250px;
+}
+.filter-group label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+}
+.form-control {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #334155;
+  background: #f8fafc;
+  transition: all 0.2s;
+  height: 38px;
+}
+.form-control:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+.filter-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* ========================================================
+   7. Main Data Table
+   ======================================================== */
+.table-container {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  overflow: hidden;
+}
+.table-scroll { overflow-x: auto; }
+.runs-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 900px;
+}
+.runs-table th {
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 14px 20px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+.runs-table td {
+  padding: 16px 20px;
+  font-size: 14px;
+  color: #334155;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+.run-table-row {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.run-table-row:hover { background: #f8fafc; }
+.run-table-row.active { background: #eff6ff; }
+
+/* Pagination */
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #ffffff;
+  border-top: 1px solid #e2e8f0;
+}
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.page-info {
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* ========================================================
+   8. Detail Drawer (Offcanvas)
+   ======================================================== */
+.drawer-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(15, 23, 42, 0.4);
+  z-index: 9998;
+  backdrop-filter: blur(2px);
+}
+.detail-drawer {
+  position: fixed;
+  top: 0; right: 0;
+  width: 100%; max-width: 650px;
+  height: 100vh;
+  background: #ffffff;
+  z-index: 9999;
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+.drawer-header {
+  padding: 24px 32px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.drawer-title-group h3 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 4px 0 8px 0;
+}
+.drawer-title-group p { font-size: 13px; color: #64748b; margin: 0; }
+.eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #64748b;
+  letter-spacing: 0.5px;
+}
+.drawer-header-actions { display: flex; align-items: flex-start; gap: 16px; }
+
+/* Drawer Tabs */
+.drawer-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 32px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+  overflow-x: auto;
+}
+.tab-btn {
+  padding: 16px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: #0f172a; }
+.tab-btn.active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+}
+
+/* Drawer Body & Content */
+.drawer-body {
+  padding: 24px 32px;
+  flex: 1;
+  overflow-y: auto;
+  background: #ffffff;
+}
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.info-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.info-box span { font-size: 12px; color: #64748b; }
+.info-box strong { font-size: 14px; color: #0f172a; }
+.code-block {
+  margin: 0;
+  padding: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  color: #334155;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.code-block.compact {
+  padding: 12px;
+  max-height: 250px;
+  overflow-y: auto;
+}
+.error-block {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+/* Logs & Writebacks */
+.log-container, .writeback-container { display: grid; gap: 16px; }
+.log-card, .writeback-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+}
+.log-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.writeback-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.writeback-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.wb-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #f8fafc;
+  padding: 10px;
+  border-radius: 6px;
+}
+.wb-info span { font-size: 12px; color: #64748b; }
+.wb-info strong { font-size: 13px; color: #334155; }
+.empty-inline {
+  padding: 24px;
+  text-align: center;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  color: #64748b;
+}
+.empty-state h3 { font-size: 18px; color: #334155; margin-bottom: 8px; }
+
+/* ========================================================
+   9. Utilities & Animations
+   ======================================================== */
+.opacity-25 { opacity: 0.25; }
+.opacity-75 { opacity: 0.75; }
+.icon-loading {
+  animation: spin 1s linear infinite;
+  width: 16px; height: 16px;
+  margin-right: 8px;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.slide-right-enter-active, .slide-right-leave-active { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+.slide-right-enter-from, .slide-right-leave-to { transform: translateX(100%); }
+
+.fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.3s ease; }
+.fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateY(-10px); }
+
 @media (max-width: 980px) {
-  .observability-grid, .run-layout, .run-filter-form { grid-template-columns: 1fr; }
-  .writeback-grid, .lock-row { grid-template-columns: 1fr; }
+  .observability-section, .filter-bar { flex-direction: column; }
+  .filter-group { min-width: 100%; }
 }
 </style>
