@@ -451,18 +451,21 @@ def delete_data_source(data_source_id: int, request: Request, principal: Princip
 
 
 @router.post('/instances', status_code=status.HTTP_201_CREATED)
-def upsert_plugin_instance(request: PluginInstanceRequest, principal: Principal = Depends(require_permission('instance.create'))) -> dict[str, object]:
-    result = _store().upsert_plugin_instance(
-        name=request.name,
-        package_name=request.package_name,
-        version=request.version,
-        input_bindings=request.input_bindings,
-        output_bindings=request.output_bindings,
-        config=request.config,
-        writeback_enabled=request.writeback_enabled,
-        schedule_enabled=request.schedule_enabled,
-        schedule_interval_sec=request.schedule_interval_sec,
-    )
+def create_plugin_instance(request: PluginInstanceRequest, principal: Principal = Depends(require_permission('instance.create'))) -> dict[str, object]:
+    try:
+        result = _store().create_plugin_instance(
+            name=request.name,
+            package_name=request.package_name,
+            version=request.version,
+            input_bindings=request.input_bindings,
+            output_bindings=request.output_bindings,
+            config=request.config,
+            writeback_enabled=request.writeback_enabled,
+            schedule_enabled=request.schedule_enabled,
+            schedule_interval_sec=request.schedule_interval_sec,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -480,18 +483,21 @@ def upsert_plugin_instance(request: PluginInstanceRequest, principal: Principal 
 
 @router.put('/instances/{instance_id}')
 def update_plugin_instance(instance_id: int, request: PluginInstanceRequest, principal: Principal = Depends(require_permission('instance.update'))) -> dict[str, object]:
-    result = _store().update_plugin_instance(
-        instance_id=instance_id,
-        name=request.name,
-        package_name=request.package_name,
-        version=request.version,
-        input_bindings=request.input_bindings,
-        output_bindings=request.output_bindings,
-        config=request.config,
-        writeback_enabled=request.writeback_enabled,
-        schedule_enabled=request.schedule_enabled,
-        schedule_interval_sec=request.schedule_interval_sec,
-    )
+    try:
+        result = _store().update_plugin_instance(
+            instance_id=instance_id,
+            name=request.name,
+            package_name=request.package_name,
+            version=request.version,
+            input_bindings=request.input_bindings,
+            output_bindings=request.output_bindings,
+            config=request.config,
+            writeback_enabled=request.writeback_enabled,
+            schedule_enabled=request.schedule_enabled,
+            schedule_interval_sec=request.schedule_interval_sec,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=404,

@@ -882,7 +882,7 @@ class MetadataStore:
             session.commit()
 
     # ---------- instances ----------
-    def upsert_plugin_instance(
+    def create_plugin_instance(
         self,
         *,
         name: str,
@@ -909,39 +909,29 @@ class MetadataStore:
             if version_row is None:
                 return None
 
+            existing = session.scalar(select(PluginInstanceModel).where(PluginInstanceModel.name == name))
+            if existing is not None:
+                raise ValueError(f"plugin instance already exists: {name}")
+
             package, plugin_version = version_row
             normalized_interval = self._normalize_schedule_interval(schedule_interval_sec)
-            instance = session.scalar(select(PluginInstanceModel).where(PluginInstanceModel.name == name))
-            if instance is None:
-                instance = PluginInstanceModel(
-                    name=name,
-                    package_id=package.id,
-                    version_id=plugin_version.id,
-                    input_bindings_json=json.dumps(input_bindings, ensure_ascii=False, sort_keys=True),
-                    output_bindings_json=json.dumps(output_bindings, ensure_ascii=False, sort_keys=True),
-                    config_json=json.dumps(config, ensure_ascii=False, sort_keys=True),
-                    writeback_enabled=1 if writeback_enabled else 0,
-                    schedule_enabled=1 if schedule_enabled else 0,
-                    schedule_interval_sec=normalized_interval,
-                    next_scheduled_run_at=self._next_schedule_time(now, schedule_enabled, normalized_interval),
-                    status="scheduled" if schedule_enabled else "configured",
-                    created_at=now,
-                    updated_at=now,
-                )
-                session.add(instance)
-                session.flush()
-            else:
-                instance.package_id = package.id
-                instance.version_id = plugin_version.id
-                instance.input_bindings_json = json.dumps(input_bindings, ensure_ascii=False, sort_keys=True)
-                instance.output_bindings_json = json.dumps(output_bindings, ensure_ascii=False, sort_keys=True)
-                instance.config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
-                instance.writeback_enabled = 1 if writeback_enabled else 0
-                instance.schedule_enabled = 1 if schedule_enabled else 0
-                instance.schedule_interval_sec = normalized_interval
-                instance.next_scheduled_run_at = self._next_schedule_time(now, schedule_enabled, normalized_interval)
-                instance.status = "scheduled" if schedule_enabled else "configured"
-                instance.updated_at = now
+            instance = PluginInstanceModel(
+                name=name,
+                package_id=package.id,
+                version_id=plugin_version.id,
+                input_bindings_json=json.dumps(input_bindings, ensure_ascii=False, sort_keys=True),
+                output_bindings_json=json.dumps(output_bindings, ensure_ascii=False, sort_keys=True),
+                config_json=json.dumps(config, ensure_ascii=False, sort_keys=True),
+                writeback_enabled=1 if writeback_enabled else 0,
+                schedule_enabled=1 if schedule_enabled else 0,
+                schedule_interval_sec=normalized_interval,
+                next_scheduled_run_at=self._next_schedule_time(now, schedule_enabled, normalized_interval),
+                status="scheduled" if schedule_enabled else "configured",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(instance)
+            session.flush()
 
             session.add(
                 AuditEventModel(
@@ -959,6 +949,31 @@ class MetadataStore:
             )
             session.commit()
             return RegisteredPluginInstance(id=instance.id, name=instance.name, status=instance.status)
+
+    def upsert_plugin_instance(
+        self,
+        *,
+        name: str,
+        package_name: str,
+        version: str,
+        input_bindings: list[dict[str, Any]],
+        output_bindings: list[dict[str, Any]],
+        config: dict[str, Any],
+        writeback_enabled: bool,
+        schedule_enabled: bool = False,
+        schedule_interval_sec: int = 30,
+    ) -> RegisteredPluginInstance | None:
+        return self.create_plugin_instance(
+            name=name,
+            package_name=package_name,
+            version=version,
+            input_bindings=input_bindings,
+            output_bindings=output_bindings,
+            config=config,
+            writeback_enabled=writeback_enabled,
+            schedule_enabled=schedule_enabled,
+            schedule_interval_sec=schedule_interval_sec,
+        )
 
     def update_plugin_instance(
         self,
@@ -991,6 +1006,15 @@ class MetadataStore:
             ).first()
             if version_row is None:
                 return None
+
+            duplicate = session.scalar(
+                select(PluginInstanceModel).where(
+                    PluginInstanceModel.name == name,
+                    PluginInstanceModel.id != instance_id,
+                )
+            )
+            if duplicate is not None:
+                raise ValueError(f"plugin instance already exists: {name}")
 
             package, plugin_version = version_row
             normalized_interval = self._normalize_schedule_interval(schedule_interval_sec)
