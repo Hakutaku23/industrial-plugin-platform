@@ -18,7 +18,7 @@ from platform_api.security import (
 )
 from platform_api.services.execution import (
     PluginExecutionError,
-    execute_plugin_instance,
+    execute_plugin_instance_locked,
     execute_plugin_version,
 )
 from platform_api.services.metadata_store import MetadataStore
@@ -288,6 +288,13 @@ def scheduler_status(principal: Principal = Depends(require_permission('system.r
     }
 
 
+@router.get('/scheduler/locks')
+def scheduler_locks(principal: Principal = Depends(require_permission('system.read'))) -> dict[str, object]:
+    return {
+        'items': scheduler.lock_snapshot(),
+    }
+
+
 @router.get('/templates/python-function-package.zip')
 def download_python_function_template(principal: Principal = Depends(require_permission('package.read'))) -> RawResponse:
     archive = build_python_function_template_archive()
@@ -545,7 +552,7 @@ def delete_plugin_instance(instance_id: int, principal: Principal = Depends(requ
 @router.post('/instances/{instance_id}/runs', status_code=status.HTTP_201_CREATED)
 def run_plugin_instance(instance_id: int, principal: Principal = Depends(require_permission('instance.run'))) -> dict[str, object]:
     try:
-        result = execute_plugin_instance(instance_id=instance_id)
+        result = execute_plugin_instance_locked(instance_id=instance_id)
     except PluginExecutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _store().record_audit_event(

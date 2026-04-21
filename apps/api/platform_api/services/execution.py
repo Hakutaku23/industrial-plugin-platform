@@ -6,9 +6,10 @@ from typing import Any
 
 from platform_api.core.config import settings
 from platform_api.services.connectors import ConnectorError, build_connector, ensure_tag_access
+from platform_api.services.execution_lock import LockManagerError, RedisExecutionLockManager
 from platform_api.services.instance_validation import BindingValidationError, validate_execution_inputs
 from platform_api.services.manifest import PluginManifest
-from platform_api.services.metadata_store import MetadataStore
+from platform_api.services.metadata_store import MetadataStore, PluginInstanceModel
 from platform_runner.executor import LocalPythonRunner, RunnerExecutionError
 
 
@@ -145,6 +146,97 @@ def execute_plugin_instance(
         metadata_store.record_audit_event(event_type="plugin.instance.writeback_failed", target_type="plugin_instance", target_id=str(instance_id), details={"message": str(exc), "run_id": result["run_id"], "exception_type": type(exc).__name__})
         writeback = [{"output_name": "*", "data_source_id": -1, "target_tag": "*", "value": None, "status": "failed", "reason": str(exc), "dry_run": True}]
     return {**result, "inputs": resolved_inputs, "writeback": writeback}
+
+
+def execute_plugin_instance_locked(
+    *,
+    instance_id: int,
+    trigger_type: str = "manual",
+    store: MetadataStore | None = None,
+    lock_manager: RedisExecutionLockManager | None = None,
+) -> dict[str, Any]:
+    metadata_store = store or MetadataStore(settings.metadata_database)
+    manager = lock_manager or RedisExecutionLockManager.from_settings()
+    ttl_sec = resolve_instance_lock_ttl_sec(instance_id=instance_id, store=metadata_store)
+
+    try:
+        lease = manager.acquire(instance_id, ttl_sec=ttl_sec)
+    except LockManagerError as exc:
+        try:
+            metadata_store.record_audit_event(
+                event_type="plugin.instance.lock_error",
+                target_type="plugin_instance",
+                target_id=str(instance_id),
+                details={"message": str(exc), "phase": "acquire", "trigger_type": trigger_type},
+            )
+        except Exception:
+            pass
+        raise PluginExecutionError(str(exc)) from exc
+    if lease is None:
+        try:
+            metadata_store.record_audit_event(
+                event_type="plugin.instance.lock_conflict",
+                target_type="plugin_instance",
+                target_id=str(instance_id),
+                details={"message": "plugin instance is already running", "trigger_type": trigger_type},
+            )
+        except Exception:
+            pass
+        raise PluginExecutionError(f"plugin instance is already running: {instance_id}")
+
+    running_at = _db_now()
+    _mark_instance_running(metadata_store, instance_id=instance_id, running_at=running_at)
+    try:
+        return execute_plugin_instance(
+            instance_id=instance_id,
+            trigger_type=trigger_type,
+            store=metadata_store,
+        )
+    finally:
+        try:
+            _finalize_instance_after_execution(
+                metadata_store,
+                instance_id=instance_id,
+                finished_at=_db_now(),
+            )
+        finally:
+            try:
+                manager.release(lease)
+            except LockManagerError as exc:
+                try:
+                    metadata_store.record_audit_event(
+                        event_type="plugin.instance.lock_error",
+                        target_type="plugin_instance",
+                        target_id=str(instance_id),
+                        details={"message": str(exc), "phase": "release", "trigger_type": trigger_type},
+                    )
+                except Exception:
+                    pass
+                raise
+
+
+def resolve_instance_lock_ttl_sec(
+    *,
+    instance_id: int,
+    store: MetadataStore | None = None,
+) -> int:
+    metadata_store = store or MetadataStore(settings.metadata_database)
+    ttl_sec = max(30, int(settings.scheduler.lock_ttl_sec))
+    instance = metadata_store.get_plugin_instance(instance_id)
+    if instance is None:
+        return ttl_sec
+
+    version_record = metadata_store.get_plugin_version(instance["package_name"], instance["version"])
+    if version_record is None:
+        return ttl_sec
+
+    try:
+        manifest = PluginManifest.model_validate(version_record["manifest"])
+        timeout_sec = int(manifest.spec.runtime.timeout_sec)
+    except Exception:
+        timeout_sec = int(settings.runner.default_timeout_sec)
+
+    return max(ttl_sec, timeout_sec + 30)
 
 
 def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict[str, Any], trigger_type: str, inputs: dict[str, Any], error_code: str, error_message: str) -> dict[str, Any]:
@@ -369,3 +461,31 @@ def _unique_tags(tags: list[str]) -> list[str]:
 def _record_writeback_result(*, store: MetadataStore, run_id: str, output_name: str, data_source_id: int, target_tag: str, value: Any, status: str, reason: str, dry_run: bool) -> dict[str, Any]:
     store.record_writeback(run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status=status, reason=reason, dry_run=dry_run)
     return {"output_name": output_name, "data_source_id": data_source_id, "target_tag": target_tag, "value": value, "status": status, "reason": reason, "dry_run": dry_run}
+
+
+def _mark_instance_running(store: MetadataStore, *, instance_id: int, running_at: datetime) -> None:
+    with store.session_factory() as session:
+        row = session.get(PluginInstanceModel, instance_id)
+        if row is None:
+            return
+        row.status = "running"
+        row.updated_at = running_at
+        session.commit()
+
+
+def _finalize_instance_after_execution(store: MetadataStore, *, instance_id: int, finished_at: datetime) -> None:
+    with store.session_factory() as session:
+        row = session.get(PluginInstanceModel, instance_id)
+        if row is None:
+            return
+        if row.schedule_enabled:
+            row.status = "scheduled"
+        else:
+            row.status = "configured"
+            row.next_scheduled_run_at = None
+        row.updated_at = finished_at
+        session.commit()
+
+
+def _db_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)

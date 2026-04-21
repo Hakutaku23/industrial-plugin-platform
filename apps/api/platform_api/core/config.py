@@ -119,6 +119,10 @@ class MetadataSettings(BaseModel):
 class SchedulerSettings(BaseModel):
     enabled: bool = True
     poll_interval_sec: float = 1.0
+    max_workers: int = 4
+    lock_ttl_sec: int = 300
+    redis_url: str | None = None
+    lock_key_prefix: str = 'lock:instance'
 
 
 class RunnerSettings(BaseModel):
@@ -139,8 +143,15 @@ class RedisDefaults(BaseModel):
     default_socket_timeout_sec: float = 2.0
 
 
+class ConnectorRetrySettings(BaseModel):
+    max_attempts: int = 3
+    base_delay_sec: float = 1.0
+    max_delay_sec: float = 8.0
+
+
 class ConnectorSettings(BaseModel):
     redis: RedisDefaults = Field(default_factory=RedisDefaults)
+    retry: ConnectorRetrySettings = Field(default_factory=ConnectorRetrySettings)
 
 
 class SecuritySettings(BaseModel):
@@ -253,8 +264,15 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ('PLATFORM_METADATA_DB_URL', ('metadata', 'db_url'), _env_str('PLATFORM_METADATA_DB_URL')),
         ('PLATFORM_SCHEDULER_ENABLED', ('scheduler', 'enabled'), _env_bool('PLATFORM_SCHEDULER_ENABLED')),
         ('PLATFORM_SCHEDULER_POLL_INTERVAL_SEC', ('scheduler', 'poll_interval_sec'), _env_float('PLATFORM_SCHEDULER_POLL_INTERVAL_SEC')),
+        ('PLATFORM_SCHEDULER_MAX_WORKERS', ('scheduler', 'max_workers'), _env_int('PLATFORM_SCHEDULER_MAX_WORKERS')),
+        ('PLATFORM_SCHEDULER_LOCK_TTL_SEC', ('scheduler', 'lock_ttl_sec'), _env_int('PLATFORM_SCHEDULER_LOCK_TTL_SEC')),
+        ('PLATFORM_SCHEDULER_REDIS_URL', ('scheduler', 'redis_url'), _env_str('PLATFORM_SCHEDULER_REDIS_URL')),
+        ('PLATFORM_SCHEDULER_LOCK_KEY_PREFIX', ('scheduler', 'lock_key_prefix'), _env_str('PLATFORM_SCHEDULER_LOCK_KEY_PREFIX')),
         ('PLATFORM_RUNNER_DEFAULT_TIMEOUT_SEC', ('runner', 'default_timeout_sec'), _env_int('PLATFORM_RUNNER_DEFAULT_TIMEOUT_SEC')),
         ('PLATFORM_RUNNER_MAX_TIMEOUT_SEC', ('runner', 'max_timeout_sec'), _env_int('PLATFORM_RUNNER_MAX_TIMEOUT_SEC')),
+        ('PLATFORM_CONNECTOR_RETRY_MAX_ATTEMPTS', ('connectors', 'retry', 'max_attempts'), _env_int('PLATFORM_CONNECTOR_RETRY_MAX_ATTEMPTS')),
+        ('PLATFORM_CONNECTOR_RETRY_BASE_DELAY_SEC', ('connectors', 'retry', 'base_delay_sec'), _env_float('PLATFORM_CONNECTOR_RETRY_BASE_DELAY_SEC')),
+        ('PLATFORM_CONNECTOR_RETRY_MAX_DELAY_SEC', ('connectors', 'retry', 'max_delay_sec'), _env_float('PLATFORM_CONNECTOR_RETRY_MAX_DELAY_SEC')),
         ('PLATFORM_LOG_LEVEL', ('logging', 'level'), _env_str('PLATFORM_LOG_LEVEL')),
         ('PLATFORM_SECURITY_ENABLED', ('security', 'enabled'), _env_bool('PLATFORM_SECURITY_ENABLED')),
         ('PLATFORM_SECURITY_TRUSTED_HOSTS', ('security', 'trusted_hosts'), [item.strip() for item in (_env_str('PLATFORM_SECURITY_TRUSTED_HOSTS') or '').split(',') if item.strip()] or None),

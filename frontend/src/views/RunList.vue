@@ -37,7 +37,87 @@ const writebacks = ref<WritebackRecord[]>([])
 const detailLoading = ref(false)
 const detailError = ref('')
 
-const statusOptions = ['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'TIMED_OUT']
+const statusOptions = ['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'TIMED_OUT', 'SKIPPED']
+
+type SchedulerStatusRecord = {
+  enabled: boolean
+  thread_alive: boolean
+  poll_interval_sec: number
+  max_workers: number
+  inflight_tasks: number
+  active_lock_count: number
+  lock_observation_error?: string | null
+  last_tick_started_at?: string | null
+  last_tick_finished_at?: string | null
+  last_error?: string | null
+  consecutive_failures: number
+}
+
+type SchedulerLockRecord = {
+  key: string
+  instance_id: number | null
+  ttl_sec: number | null
+}
+
+type AuditEventRecord = {
+  id: number
+  event_type: string
+  actor: string
+  target_type: string
+  target_id: string
+  details: Record<string, unknown>
+  created_at: string
+}
+
+const schedulerStatus = ref<SchedulerStatusRecord | null>(null)
+const schedulerLocks = ref<SchedulerLockRecord[]>([])
+const auditEvents = ref<AuditEventRecord[]>([])
+const observabilityLoading = ref(false)
+const observabilityError = ref('')
+
+async function apiGet<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    let detail = `请求失败: ${response.status}`
+    try {
+      const payload = await response.json()
+      if (typeof payload?.detail === 'string' && payload.detail) detail = payload.detail
+    } catch {}
+    throw new Error(detail)
+  }
+  return response.json() as Promise<T>
+}
+
+async function loadObservability() {
+  observabilityLoading.value = true
+  observabilityError.value = ''
+  try {
+    const [statusPayload, locksPayload, auditsPayload] = await Promise.all([
+      apiGet<SchedulerStatusRecord>('/api/v1/scheduler/status'),
+      apiGet<{ items: SchedulerLockRecord[] }>('/api/v1/scheduler/locks'),
+      apiGet<{ items: AuditEventRecord[] }>('/api/v1/audit-events'),
+    ])
+    schedulerStatus.value = statusPayload
+    schedulerLocks.value = locksPayload.items
+    auditEvents.value = auditsPayload.items
+      .filter((item) => item.event_type.startsWith('connector.operation.') || item.event_type.startsWith('plugin.instance.lock_') || item.event_type.startsWith('plugin.run.skipped') || item.event_type.startsWith('plugin.instance.schedule_') || item.event_type.startsWith('scheduler.'))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 12)
+  } catch (err) {
+    observabilityError.value = err instanceof Error ? err.message : '调度观测信息加载失败'
+  } finally {
+    observabilityLoading.value = false
+  }
+}
+
+async function refreshAll() {
+  await Promise.all([loadRuns(), loadObservability()])
+}
+
 
 async function loadOptions() {
   optionsLoading.value = true
@@ -212,9 +292,20 @@ function instanceLabel(run: PluginRunRecord) {
   return run.instance_id == null ? '-' : String(run.instance_id)
 }
 
+function formatTtl(value: number | null | undefined) {
+  if (value == null) return '-'
+  return `${value.toFixed(1)} s`
+}
+
+function auditSummary(item: AuditEventRecord) {
+  const message = item.details?.message
+  if (typeof message === 'string' && message) return message
+  return item.event_type
+}
+
 onMounted(async () => {
   await loadOptions()
-  await loadRuns()
+  await refreshAll()
 })
 </script>
 
@@ -226,10 +317,63 @@ onMounted(async () => {
         <h2>运行记录</h2>
         <p>以查询表方式查看运行概要。点击某一条记录后，再在右侧查看完整详情。</p>
       </div>
-      <button type="button" class="secondary-button" @click="loadRuns" :disabled="loading || optionsLoading">
+      <button type="button" class="secondary-button" @click="refreshAll" :disabled="loading || optionsLoading">
         {{ loading ? '刷新中' : '刷新' }}
       </button>
     </div>
+
+    <section class="observability-grid">
+      <article class="obs-card">
+        <div class="obs-head">
+          <strong>调度器状态</strong>
+          <span v-if="observabilityLoading" class="muted">刷新中</span>
+        </div>
+        <p v-if="observabilityError" class="error">{{ observabilityError }}</p>
+        <div v-else-if="schedulerStatus" class="status-grid">
+          <div><span>线程存活</span><strong>{{ schedulerStatus.thread_alive ? 'Yes' : 'No' }}</strong></div>
+          <div><span>轮询间隔</span><strong>{{ schedulerStatus.poll_interval_sec }} s</strong></div>
+          <div><span>工作线程</span><strong>{{ schedulerStatus.max_workers }}</strong></div>
+          <div><span>执行中</span><strong>{{ schedulerStatus.inflight_tasks }}</strong></div>
+          <div><span>活跃锁</span><strong>{{ schedulerStatus.active_lock_count }}</strong></div>
+          <div><span>连续失败</span><strong>{{ schedulerStatus.consecutive_failures }}</strong></div>
+        </div>
+        <p v-if="schedulerStatus?.lock_observation_error" class="muted">锁扫描异常：{{ schedulerStatus.lock_observation_error }}</p>
+        <p v-if="schedulerStatus?.last_error" class="muted">最近错误：{{ schedulerStatus.last_error }}</p>
+      </article>
+
+      <article class="obs-card">
+        <div class="obs-head">
+          <strong>Redis 活跃锁</strong>
+          <span class="muted">{{ schedulerLocks.length }} 条</span>
+        </div>
+        <div v-if="schedulerLocks.length === 0" class="empty-inline">当前无活跃实例锁</div>
+        <div v-else class="lock-list">
+          <div v-for="item in schedulerLocks" :key="item.key" class="lock-row">
+            <div><span>实例</span><strong>{{ item.instance_id ?? '-' }}</strong></div>
+            <div><span>TTL</span><strong>{{ formatTtl(item.ttl_sec) }}</strong></div>
+            <div class="wide"><span>Key</span><strong>{{ item.key }}</strong></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="obs-card obs-card-wide">
+        <div class="obs-head">
+          <strong>最近调度 / 锁 / 连接器事件</strong>
+          <span class="muted">{{ auditEvents.length }} 条</span>
+        </div>
+        <div v-if="auditEvents.length === 0" class="empty-inline">暂无相关审计事件</div>
+        <div v-else class="audit-list">
+          <div v-for="item in auditEvents" :key="item.id" class="audit-row">
+            <div class="audit-meta">
+              <strong>{{ item.event_type }}</strong>
+              <span>{{ item.target_type }} / {{ item.target_id }}</span>
+              <span>{{ formatTime(item.created_at) }}</span>
+            </div>
+            <p class="muted">{{ auditSummary(item) }}</p>
+          </div>
+        </div>
+      </article>
+    </section>
 
     <form class="run-filter-form" @submit.prevent="loadRuns">
       <label>
@@ -421,6 +565,16 @@ onMounted(async () => {
 
 <style scoped>
 .run-page { max-width: 1360px; }
+.observability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.obs-card { padding: 18px; background: #ffffff; border: 1px solid #d8e3df; border-radius: 8px; display: grid; gap: 12px; }
+.obs-card-wide { grid-column: 1 / -1; }
+.obs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lock-list, .audit-list { display: grid; gap: 10px; }
+.lock-row, .audit-row { display: grid; gap: 8px; padding: 12px; background: #fbfdfc; border: 1px solid #d8e3df; border-radius: 8px; }
+.lock-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lock-row .wide { grid-column: 1 / -1; }
+.lock-row span, .audit-meta span { color: #5e6f6c; font-size: 13px; }
+.audit-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .run-filter-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 20px; background: #ffffff; border: 1px solid #d8e3df; border-radius: 8px; }
 .run-filter-form label { display: grid; gap: 8px; color: #2f403d; font-weight: 600; }
 .run-filter-form input, .run-filter-form select { width: 100%; padding: 10px; border: 1px solid #bacac5; border-radius: 6px; }
@@ -454,7 +608,7 @@ onMounted(async () => {
 .writeback-grid div { display: grid; gap: 4px; padding: 10px; background: #f5f8f7; border: 1px solid #d8e3df; border-radius: 6px; }
 .writeback-grid span { color: #5e6f6c; font-size: 13px; }
 @media (max-width: 980px) {
-  .run-layout, .run-filter-form { grid-template-columns: 1fr; }
-  .writeback-grid { grid-template-columns: 1fr; }
+  .observability-grid, .run-layout, .run-filter-form { grid-template-columns: 1fr; }
+  .writeback-grid, .lock-row { grid-template-columns: 1fr; }
 }
 </style>

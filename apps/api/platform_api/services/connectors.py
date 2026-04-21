@@ -1,5 +1,14 @@
+from __future__ import annotations
+
+import logging
+import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+from platform_api.core.config import settings
+
+logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 class ConnectorError(RuntimeError):
@@ -7,6 +16,10 @@ class ConnectorError(RuntimeError):
 
 
 class Connector:
+    def __init__(self, data_source: dict[str, Any], store=None) -> None:
+        self.data_source = data_source
+        self.store = store
+
     def read_tag(self, tag: str) -> Any:
         raise NotImplementedError
 
@@ -26,11 +39,87 @@ class Connector:
                 results[tag] = {"status": "failed", "value": value, "reason": str(exc)}
         return results
 
+    @property
+    def _connector_type(self) -> str:
+        return str(self.data_source.get("connector_type", "unknown"))
+
+    @property
+    def _data_source_id(self) -> int:
+        return int(self.data_source.get("id", -1))
+
+    def _record_connector_event(self, *, event_type: str, operation: str, attempt: int, details: dict[str, Any]) -> None:
+        if self.store is None:
+            return
+        payload = {
+            "data_source_id": self._data_source_id,
+            "data_source_name": self.data_source.get("name"),
+            "connector_type": self._connector_type,
+            "operation": operation,
+            "attempt": attempt,
+            **details,
+        }
+        try:
+            self.store.record_audit_event(
+                event_type=event_type,
+                target_type="data_source",
+                target_id=str(self._data_source_id),
+                details=payload,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "failed to record connector audit event %s for data source %s",
+                event_type,
+                self._data_source_id,
+            )
+
+    def _retry(self, *, operation: str, target: str, func: Callable[[], _T]) -> _T:
+        max_attempts = max(1, int(settings.connectors.retry.max_attempts))
+        base_delay_sec = max(0.0, float(settings.connectors.retry.base_delay_sec))
+        max_delay_sec = max(base_delay_sec, float(settings.connectors.retry.max_delay_sec))
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = func()
+                if attempt > 1:
+                    self._record_connector_event(
+                        event_type="connector.operation.recovered",
+                        operation=operation,
+                        attempt=attempt,
+                        details={"target": target, "message": "connector operation recovered after retry"},
+                    )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt >= max_attempts:
+                    self._record_connector_event(
+                        event_type="connector.operation.failed",
+                        operation=operation,
+                        attempt=attempt,
+                        details={"target": target, "message": str(exc)},
+                    )
+                    raise ConnectorError(
+                        f"{self._connector_type} {operation} failed after {attempt} attempt(s): {exc}"
+                    ) from exc
+
+                delay = min(max_delay_sec, base_delay_sec * (2 ** (attempt - 1)))
+                self._record_connector_event(
+                    event_type="connector.operation.retrying",
+                    operation=operation,
+                    attempt=attempt,
+                    details={"target": target, "message": str(exc), "retry_delay_sec": delay},
+                )
+                if delay > 0:
+                    time.sleep(delay)
+
+        if last_error is not None:
+            raise ConnectorError(str(last_error)) from last_error
+        raise ConnectorError(f"{self._connector_type} {operation} failed")
+
 
 class MockConnector(Connector):
     def __init__(self, data_source: dict[str, Any], store) -> None:
-        self.data_source = data_source
-        self.store = store
+        super().__init__(data_source, store)
 
     def read_tag(self, tag: str) -> Any:
         ensure_tag_access(self.data_source, tag, "read")
@@ -69,14 +158,14 @@ class MockConnector(Connector):
 
 
 class RedisConnector(Connector):
-    def __init__(self, data_source: dict[str, Any]) -> None:
+    def __init__(self, data_source: dict[str, Any], store=None) -> None:
+        super().__init__(data_source, store)
         try:
             import redis
         except ImportError as exc:  # pragma: no cover
             raise ConnectorError("redis package is not installed in the Python environment") from exc
 
         config = data_source["config"]
-        self.data_source = data_source
         self.prefix = str(config.get("keyPrefix", "")).strip()
         raw_separator = config.get("keySeparator", ":")
         self.separator = ":" if raw_separator is None or str(raw_separator) == "" else str(raw_separator)
@@ -93,20 +182,35 @@ class RedisConnector(Connector):
     def read_tag(self, tag: str) -> Any:
         ensure_tag_access(self.data_source, tag, "read")
         key = self._key(tag)
-        value = self.client.get(key)
+        value = self._retry(
+            operation="read_tag",
+            target=key,
+            func=lambda: self.client.get(key),
+        )
         if value is None:
             raise ConnectorError(f"redis key not found: {key}")
         return _coerce_scalar(value)
 
     def write_tag(self, tag: str, value: Any) -> None:
         ensure_tag_access(self.data_source, tag, "write")
-        self.client.set(self._key(tag), value)
+        key = self._key(tag)
+        ok = self._retry(
+            operation="write_tag",
+            target=key,
+            func=lambda: self.client.set(key, value),
+        )
+        if not ok:
+            raise ConnectorError(f"redis set returned false: {key}")
 
     def read_tags(self, tags: list[str]) -> dict[str, Any]:
         for tag in tags:
             ensure_tag_access(self.data_source, tag, "read")
         keys = [self._key(tag) for tag in tags]
-        values = self.client.mget(keys)
+        values = self._retry(
+            operation="read_tags",
+            target=", ".join(keys[:5]) + (" ..." if len(keys) > 5 else ""),
+            func=lambda: self.client.mget(keys),
+        )
         result: dict[str, Any] = {}
         for tag, key, value in zip(tags, keys, values):
             if value is None:
@@ -117,15 +221,21 @@ class RedisConnector(Connector):
     def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for tag in values:
             ensure_tag_access(self.data_source, tag, "write")
-        pipe = self.client.pipeline(transaction=False)
-        resolved_keys: list[tuple[str, str, Any]] = []
-        for tag, value in values.items():
-            key = self._key(tag)
-            resolved_keys.append((tag, key, value))
-            pipe.set(key, value)
-        executed = pipe.execute()
+
+        def _execute_pipeline():
+            pipe = self.client.pipeline(transaction=False)
+            for tag, value in values.items():
+                pipe.set(self._key(tag), value)
+            return pipe.execute()
+
+        executed = self._retry(
+            operation="write_tags",
+            target=f"{len(values)} tag(s)",
+            func=_execute_pipeline,
+        )
         results: dict[str, dict[str, Any]] = {}
-        for (tag, key, value), ok in zip(resolved_keys, executed):
+        for (tag, value), ok in zip(values.items(), executed):
+            key = self._key(tag)
             results[tag] = {
                 "status": "success" if ok else "failed",
                 "value": value,
@@ -146,8 +256,8 @@ class RedisConnector(Connector):
 
 
 class TDengineConnector(Connector):
-    def __init__(self, data_source: dict[str, Any]) -> None:
-        self.data_source = data_source
+    def __init__(self, data_source: dict[str, Any], store=None) -> None:
+        super().__init__(data_source, store)
         config = data_source["config"]
         self.url = str(config.get("url", "http://127.0.0.1:6041")).strip()
         self.user = str(config.get("user", "root")).strip() or "root"
@@ -195,44 +305,52 @@ class TDengineConnector(Connector):
         for tag in normalized_tags:
             ensure_tag_access(self.data_source, tag, "read")
 
-        conn = None
+        def _query():
+            conn = None
+            try:
+                conn = taosrest.connect(
+                    url=self.url,
+                    user=self.user,
+                    password=self.password,
+                    database=self.database,
+                    timezone=self.timezone,
+                )
+                cursor = conn.cursor()
+                start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+                end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+                if len(normalized_tags) == 1:
+                    tag_sql = f"point_code='{_sql_quote(normalized_tags[0])}'"
+                else:
+                    quoted = ", ".join(f"'{_sql_quote(tag)}'" for tag in normalized_tags)
+                    tag_sql = f"point_code IN ({quoted})"
+                sql = (
+                    f"SELECT ts, point_value, point_code FROM {self.table_name} "
+                    f"WHERE {tag_sql} AND ts >= '{start_time_str}' AND ts <= '{end_time_str}'"
+                )
+                cursor.execute(sql)
+                rows = cursor.fetchall()
+                if not rows:
+                    return pd.DataFrame(columns=["ts", *normalized_tags])
+                df = pd.DataFrame(rows, columns=["ts", "point_value", "point_code"])
+                wide = (
+                    df.pivot_table(index="ts", columns="point_code", values="point_value", aggfunc="first")
+                    .sort_index()
+                    .reset_index()
+                )
+                wide.columns.name = None
+                return wide
+            finally:
+                if conn is not None:
+                    conn.close()
+
         try:
-            conn = taosrest.connect(
-                url=self.url,
-                user=self.user,
-                password=self.password,
-                database=self.database,
-                timezone=self.timezone,
+            return self._retry(
+                operation="query_history",
+                target=", ".join(normalized_tags[:5]) + (" ..." if len(normalized_tags) > 5 else ""),
+                func=_query,
             )
-            cursor = conn.cursor()
-            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
-            if len(normalized_tags) == 1:
-                tag_sql = f"point_code='{_sql_quote(normalized_tags[0])}'"
-            else:
-                quoted = ", ".join(f"'{_sql_quote(tag)}'" for tag in normalized_tags)
-                tag_sql = f"point_code IN ({quoted})"
-            sql = (
-                f"SELECT ts, point_value, point_code FROM {self.table_name} "
-                f"WHERE {tag_sql} AND ts >= '{start_time_str}' AND ts <= '{end_time_str}'"
-            )
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            if not rows:
-                return pd.DataFrame(columns=["ts", *normalized_tags])
-            df = pd.DataFrame(rows, columns=["ts", "point_value", "point_code"])
-            wide = (
-                df.pivot_table(index="ts", columns="point_code", values="point_value", aggfunc="first")
-                .sort_index()
-                .reset_index()
-            )
-            wide.columns.name = None
-            return wide
-        except Exception as exc:  # noqa: BLE001
+        except ConnectorError as exc:
             raise ConnectorError(f"tdengine query failed: {exc}") from exc
-        finally:
-            if conn is not None:
-                conn.close()
 
 
 def build_connector(data_source: dict[str, Any], store) -> Connector:
@@ -240,9 +358,9 @@ def build_connector(data_source: dict[str, Any], store) -> Connector:
     if connector_type == "mock":
         return MockConnector(data_source, store)
     if connector_type == "redis":
-        return RedisConnector(data_source)
+        return RedisConnector(data_source, store)
     if connector_type == "tdengine":
-        return TDengineConnector(data_source)
+        return TDengineConnector(data_source, store)
     raise ConnectorError(f"unsupported connector type: {connector_type}")
 
 

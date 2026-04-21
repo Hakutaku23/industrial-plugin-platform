@@ -18,22 +18,17 @@ storage:
   run_storage_dir: var/runs
 
 metadata:
-  # Switched from sqlite to mysql for local validation.
   backend: mysql
-
-  # Retained only as a fallback field; unused while db_url is set.
   sqlite_path: var/platform.sqlite3
-
-  # Actual user/password:
-  #   user     = platform
-  #   password = PSELAB!2025.
-  #
-  # In URL form, "!" must be encoded as %21.
   db_url: "mysql+pymysql://platform:PSELAB%212025.@127.0.0.1:3306/industrial_plugin_platform?charset=utf8mb4"
 
 scheduler:
   enabled: true
   poll_interval_sec: 1.0
+  max_workers: 4
+  lock_ttl_sec: 300
+  redis_url: "redis://127.0.0.1:6379/0"
+  lock_key_prefix: "lock:instance"
 
 runner:
   default_timeout_sec: 30
@@ -50,18 +45,17 @@ connectors:
     default_db: 0
     default_connect_timeout_sec: 2.0
     default_socket_timeout_sec: 2.0
+  retry:
+    max_attempts: 3
+    base_delay_sec: 1.0
+    max_delay_sec: 8.0
 
 security:
-  # Dev mode still requires login. The frontend stores no token; the backend
-  # issues an HttpOnly session cookie after successful login.
   enabled: true
   session_cookie_name: ipp_session
   session_cookie_secure: false
   session_cookie_samesite: lax
   session_ttl_sec: 43200
-
-  # Local bootstrap account for first-run development only. Override these in
-  # deployment with PLATFORM_SECURITY_BOOTSTRAP_ADMIN_* environment variables.
   bootstrap_admin_username: admin
   bootstrap_admin_password: "admin123456"
   bootstrap_admin_display_name: Local Administrator
