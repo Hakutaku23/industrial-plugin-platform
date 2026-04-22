@@ -1,0 +1,49 @@
+{
+  "product": {
+    "code": "industrial-plugin-platform",
+    "edition": "professional",
+    "version_range": {
+      "min": "0.1.0",
+      "max": "2.x"
+    }
+  },
+  "customer": {
+    "name": "示例客户",
+    "site": "示例厂区",
+    "contact": ""
+  },
+  "subject": {
+    "bind_mode": "deployment_fingerprint",
+    "deployment_fingerprint": "REPLACE_ME",
+    "installation_id": null,
+    "note": ""
+  },
+  "validity": {
+    "issued_at": "2026-04-22T00:00:00Z",
+    "not_before": "2026-04-22T00:00:00Z",
+    "expire_at": "2027-04-22T23:59:59Z",
+    "grace_days": 7
+  },
+  "entitlements": {
+    "allow_instance_create": true,
+    "allow_instance_run": true,
+    "allow_schedule": true,
+    "allow_real_writeback": true
+  },
+  "quotas": {
+    "max_instances": 200,
+    "max_scheduled_instances": 100
+  },
+  "policy": {
+    "on_expire": "readonly",
+    "on_subject_mismatch": "deny",
+    "on_time_rollback": "readonly",
+    "on_signature_invalid": "deny"
+  },
+  "metadata": {
+    "issuer": "PSELAB",
+    "issued_by": "operator-name",
+    "comment": "",
+    "tags": ["industrial", "offline"]
+  }
+}

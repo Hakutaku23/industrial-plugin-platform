@@ -274,6 +274,32 @@ def _claim_due_scheduled_instance(
         }
 
 
+def _finalize_scheduled_instance_run(
+    *,
+    store: MetadataStore,
+    instance_id: int,
+    finished_at: datetime,
+) -> None:
+    with store.session_factory() as session:
+        row = session.get(PluginInstanceModel, instance_id)
+        if row is None:
+            return
+
+        row.last_scheduled_run_at = finished_at
+        if row.schedule_enabled:
+            if row.next_scheduled_run_at is None:
+                row.next_scheduled_run_at = _align_to_interval_boundary(
+                    finished_at,
+                    max(5, int(row.schedule_interval_sec or 30)),
+                )
+            row.status = 'scheduled'
+        else:
+            row.next_scheduled_run_at = None
+            row.status = 'stopped'
+        row.updated_at = finished_at
+        session.commit()
+
+
 def _handle_locked_due_instance(
     *,
     store: MetadataStore,

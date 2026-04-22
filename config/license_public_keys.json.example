@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "keys": [
+    {
+      "kid": "ed25519-2026-main",
+      "alg": "Ed25519",
+      "public_key": "REPLACE_WITH_BASE64_PUBLIC_KEY",
+      "status": "active"
+    }
+  ]
+}
