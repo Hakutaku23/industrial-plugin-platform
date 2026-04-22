@@ -24,3 +24,5 @@ config/platform.*.local.json
 *.tar.gz
 crates/target/
 crates/Cargo.lock
+CHANGED_FILES.md
+USAGE.md
