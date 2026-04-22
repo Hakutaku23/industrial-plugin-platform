@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from platform_api.api import auth, data_sources, instances, packages, runs, scheduler, system
+from platform_api.api import auth, data_sources, instances, internal_scheduler, packages, runs, scheduler, system
 
 router = APIRouter()
 
@@ -8,6 +8,7 @@ for module in (
     system,
     auth,
     scheduler,
+    internal_scheduler,
     packages,
     data_sources,
     instances,

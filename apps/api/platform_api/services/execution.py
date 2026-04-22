@@ -6,10 +6,17 @@ from typing import Any
 
 from platform_api.core.config import settings
 from platform_api.services.connectors import ConnectorError, build_connector, ensure_tag_access
-from platform_api.services.execution_lock import LockManagerError, RedisExecutionLockManager
+from platform_api.services.execution_lock import (
+    InstanceExecutionLease,
+    LockManagerError,
+    RedisExecutionLockManager,
+)
 from platform_api.services.instance_validation import BindingValidationError, validate_execution_inputs
 from platform_api.services.manifest import PluginManifest
 from platform_api.services.metadata_store import MetadataStore, PluginInstanceModel
+from platform_api.services.runtime_bridge import RustRunnerBridge
+from platform_api.services.runtime_errors import RustRunnerBinaryNotFound, RustRunnerBridgeError
+from platform_api.services.runtime_protocol import RustRunnerResult
 from platform_runner.executor import LocalPythonRunner, RunnerExecutionError
 
 
@@ -26,6 +33,7 @@ def execute_plugin_version(
     trigger_type: str = "manual",
     instance_id: int | None = None,
     store: MetadataStore | None = None,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata_store = store or MetadataStore(settings.metadata_database)
     version_record = metadata_store.get_plugin_version(package_name, version)
@@ -34,7 +42,7 @@ def execute_plugin_version(
 
     manifest = PluginManifest.model_validate(version_record["manifest"])
     if manifest.spec.plugin_type != "python" or manifest.spec.entry.mode != "function":
-        raise PluginExecutionError("local MVP execution only supports python:function plugins")
+        raise PluginExecutionError("phase 1 runtime only supports python:function plugins")
 
     try:
         validate_execution_inputs(manifest=manifest, inputs=inputs)
@@ -43,17 +51,21 @@ def execute_plugin_version(
 
     run_id = f"run-{uuid.uuid4().hex}"
     started_at = datetime.now(UTC)
+    context = {
+        "run_id": run_id,
+        "instance_id": instance_id,
+        "plugin": package_name,
+        "version": version,
+        "timestamp": started_at.isoformat(),
+        "attempt": 1,
+        "trigger_type": trigger_type,
+        "environment": settings.environment,
+    }
+    if execution_context:
+        context.update(dict(execution_context))
+
     payload = {
-        "context": {
-            "run_id": run_id,
-            "instance_id": instance_id,
-            "plugin": package_name,
-            "version": version,
-            "timestamp": started_at.isoformat(),
-            "attempt": 1,
-            "trigger_type": trigger_type,
-            "environment": settings.environment,
-        },
+        "context": context,
         "inputs": inputs,
         "config": config,
         "capabilities": manifest.spec.permissions.model_dump(),
@@ -61,32 +73,59 @@ def execute_plugin_version(
 
     outputs: dict[str, Any] = {}
     metrics: dict[str, Any] = {}
-    logs: list[dict[str, str]] = [{"source": "runner", "level": "INFO", "message": "local run started"}]
+    logs: list[dict[str, str]] = [{"source": "runner", "level": "INFO", "message": "run started"}]
     error: dict[str, Any] | None = None
     status = "FAILED"
 
+    package_dir = _resolve_package_path(str(version_record["package_path"]))
     try:
-        package_dir = _resolve_package_path(str(version_record["package_path"]))
-        runner_result = LocalPythonRunner().execute_function(
+        runner_result = _execute_via_runtime_bridge(
             package_dir=package_dir,
-            entry_file=manifest.spec.entry.file or "",
-            callable_name=manifest.spec.entry.callable or "",
+            manifest=manifest,
             payload=payload,
-            timeout_sec=manifest.spec.runtime.timeout_sec,
+            trigger_type=trigger_type,
+            run_id=run_id,
         )
         outputs = runner_result.outputs
-        metrics = runner_result.metrics
+        metrics = _build_runtime_metrics(
+            runner_result=runner_result,
+            trigger_type=trigger_type,
+            context=context,
+            fallback_started_at=started_at,
+            fallback_finished_at=datetime.now(UTC),
+        )
+        logs.append({
+            "source": "runner",
+            "level": "INFO",
+            "message": f"executor backend: {metrics.get('executor_backend')}"
+        })
+        if metrics.get('scheduler_backend') and trigger_type == 'schedule':
+            logs.append({
+                "source": "scheduler",
+                "level": "INFO",
+                "message": f"scheduler backend: {metrics.get('scheduler_backend')}; drift_ms={metrics.get('drift_ms')} queue_delay_ms={metrics.get('queue_delay_ms')}"
+            })
         logs.extend({"source": "plugin", "level": "INFO", "message": message} for message in runner_result.logs)
         if runner_result.stderr:
-            logs.append({"source": "plugin_stderr", "level": "WARN", "message": runner_result.stderr[-2000:]})
+            logs.append({"source": "plugin_stderr", "level": "WARN", "message": runner_result.stderr[-4000:]})
         status = _map_plugin_status(runner_result.status)
+        if runner_result.error_code:
+            error = {"code": runner_result.error_code, "message": runner_result.error_message}
     except subprocess.TimeoutExpired as exc:
         status = "TIMED_OUT"
         error = {"code": "E_TIMEOUT", "message": str(exc)}
+        metrics = {
+            'executor_backend': 'python_runner_timeout',
+            'scheduler_backend': _scheduler_backend_for_trigger(trigger_type),
+        }
         logs.append({"source": "runner", "level": "ERROR", "message": "plugin execution timed out"})
-    except RunnerExecutionError as exc:
+    except (RunnerExecutionError, RustRunnerBridgeError) as exc:
         status = "FAILED"
         error = {"code": "E_RUNTIME_FAILED", "message": str(exc)}
+        metrics = {
+            'executor_backend': 'runtime_error',
+            'scheduler_backend': _scheduler_backend_for_trigger(trigger_type),
+        }
         logs.append({"source": "runner", "level": "ERROR", "message": str(exc)})
 
     finished_at = datetime.now(UTC)
@@ -115,6 +154,7 @@ def execute_plugin_instance(
     instance_id: int,
     trigger_type: str = "manual",
     store: MetadataStore | None = None,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata_store = store or MetadataStore(settings.metadata_database)
     instance = metadata_store.get_plugin_instance(instance_id)
@@ -136,6 +176,7 @@ def execute_plugin_instance(
             trigger_type=trigger_type,
             instance_id=instance_id,
             store=metadata_store,
+            execution_context=execution_context,
         )
     except PluginExecutionError as exc:
         return _record_failed_instance_run(metadata_store=metadata_store, instance=instance, trigger_type=trigger_type, inputs=resolved_inputs, error_code="E_EXECUTION_SETUP_FAILED", error_message=str(exc))
@@ -239,6 +280,51 @@ def resolve_instance_lock_ttl_sec(
     return max(ttl_sec, timeout_sec + 30)
 
 
+def _execute_via_runtime_bridge(
+    *,
+    package_dir: Path,
+    manifest: PluginManifest,
+    payload: dict[str, Any],
+    trigger_type: str,
+    run_id: str,
+) -> RustRunnerResult:
+    try:
+        bridge = RustRunnerBridge()
+        return bridge.execute_function(
+            package_dir=package_dir,
+            entry_file=manifest.spec.entry.file or '',
+            callable_name=manifest.spec.entry.callable or '',
+            payload=payload,
+            timeout_sec=int(manifest.spec.runtime.timeout_sec),
+            memory_mb=manifest.spec.runtime.memory_mb,
+            cpu_limit=manifest.spec.runtime.cpu_limit,
+            working_dir=manifest.spec.runtime.working_dir or '.',
+            runtime_env=dict(manifest.spec.runtime.env),
+            capabilities=manifest.spec.permissions.model_dump(),
+            task_id=run_id,
+            run_id=run_id,
+            trigger_type=trigger_type,
+        )
+    except RustRunnerBinaryNotFound:
+        local = LocalPythonRunner().execute_function(
+            package_dir=package_dir,
+            entry_file=manifest.spec.entry.file or "",
+            callable_name=manifest.spec.entry.callable or "",
+            payload=payload,
+            timeout_sec=manifest.spec.runtime.timeout_sec,
+        )
+        return RustRunnerResult(
+            status=local.status,
+            outputs=local.outputs,
+            logs=local.logs,
+            metrics=local.metrics,
+            stderr=local.stderr,
+            returncode=local.returncode,
+            backend='python_runner_fallback',
+            raw_status=local.status,
+        )
+
+
 def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict[str, Any], trigger_type: str, inputs: dict[str, Any], error_code: str, error_message: str) -> dict[str, Any]:
     started_at = datetime.now(UTC)
     version_record = metadata_store.get_plugin_version(instance["package_name"], instance["version"])
@@ -255,13 +341,84 @@ def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict
         status="FAILED",
         inputs=inputs,
         outputs={},
-        metrics={},
+        metrics={
+            'executor_backend': 'not_run',
+            'scheduler_backend': _scheduler_backend_for_trigger(trigger_type),
+        },
         logs=[{"source": "scheduler" if trigger_type == "schedule" else "runner", "level": "ERROR", "message": error_message}],
         error={"code": error_code, "message": error_message},
         started_at=started_at,
         finished_at=datetime.now(UTC),
     )
     return {"id": recorded.id, "run_id": recorded.run_id, "status": recorded.status, "inputs": inputs, "outputs": {}, "metrics": {}, "error": {"code": error_code, "message": error_message}, "writeback": []}
+
+
+def _build_runtime_metrics(
+    *,
+    runner_result: RustRunnerResult,
+    trigger_type: str,
+    context: dict[str, Any],
+    fallback_started_at: datetime,
+    fallback_finished_at: datetime,
+) -> dict[str, Any]:
+    metrics = dict(runner_result.metrics or {})
+    metrics['executor_backend'] = runner_result.backend or 'rust_runner'
+    metrics['scheduler_backend'] = _scheduler_backend_for_trigger(trigger_type)
+    metrics['runner_exit_code'] = runner_result.returncode
+    if runner_result.task_work_dir:
+        metrics['task_work_dir'] = runner_result.task_work_dir
+    timing = dict(runner_result.timing or {})
+    resource = dict(runner_result.resource_usage or {})
+    runner_started_at = _safe_parse_iso(timing.get('started_at')) or fallback_started_at
+    runner_finished_at = _safe_parse_iso(timing.get('finished_at')) or fallback_finished_at
+    metrics['runner_started_at'] = runner_started_at.isoformat()
+    metrics['runner_finished_at'] = runner_finished_at.isoformat()
+    metrics['execution_wall_time_ms'] = int(timing.get('wall_time_ms') or max(0, int((runner_finished_at - runner_started_at).total_seconds() * 1000)))
+    if resource:
+        metrics['peak_rss_mb'] = int(resource.get('peak_rss_mb') or 0)
+        metrics['cpu_time_user_ms'] = int(resource.get('cpu_time_user_ms') or 0)
+        metrics['cpu_time_system_ms'] = int(resource.get('cpu_time_system_ms') or 0)
+        metrics['kill_reason'] = str(resource.get('kill_reason') or 'none')
+    scheduled_for_raw = context.get('scheduled_for')
+    claimed_at_raw = context.get('claimed_at')
+    if scheduled_for_raw:
+        scheduled_for = _safe_parse_iso(scheduled_for_raw)
+        if scheduled_for is not None:
+            metrics['scheduled_for'] = scheduled_for.isoformat()
+            metrics['drift_ms'] = max(0, int((runner_started_at - scheduled_for).total_seconds() * 1000))
+            if claimed_at_raw:
+                claimed_at = _safe_parse_iso(claimed_at_raw)
+                if claimed_at is not None:
+                    metrics['claimed_at'] = claimed_at.isoformat()
+                    metrics['claim_delay_ms'] = max(0, int((claimed_at - scheduled_for).total_seconds() * 1000))
+                    metrics['queue_delay_ms'] = max(0, int((runner_started_at - claimed_at).total_seconds() * 1000))
+            else:
+                metrics['queue_delay_ms'] = metrics['drift_ms']
+    if context.get('scheduler_worker_id'):
+        metrics['scheduler_worker_id'] = str(context['scheduler_worker_id'])
+    metrics['raw_runner_status'] = runner_result.raw_status or runner_result.status
+    return metrics
+
+
+def _safe_parse_iso(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def _scheduler_backend_for_trigger(trigger_type: str) -> str:
+    if trigger_type == 'schedule':
+        return 'rust_daemon' if str(settings.scheduler.mode).lower() == 'rust-daemon' else 'python_thread'
+    return 'manual'
 
 
 def _resolve_package_path(package_path: str) -> Path:

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "ipp_runner_core",
+  "ipp_scheduler_core",
+]
+resolver = "2"

@@ -27,6 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv "$VIRTUAL_ENV" && \
     "$VIRTUAL_ENV/bin/pip" install --upgrade pip setuptools wheel
 
+COPY requirements.txt /workspace/
+RUN pip install -r /workspace/requirements.txt && \
+    rm /workspace/requirements.txt
+
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --profile minimal --default-toolchain stable && \
     rustup component add rustfmt clippy && \
     rustc --version && cargo --version && python --version && node --version && npm --version

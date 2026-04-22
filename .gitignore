@@ -22,3 +22,5 @@ config/platform.local.json
 config/platform.*.local.json
 *.zip
 *.tar.gz
+crates/target/
+crates/Cargo.lock

@@ -1,7 +1,9 @@
 import contextlib
 import importlib
 import importlib.util
+import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -29,7 +31,7 @@ def main() -> int:
         return 2
 
     try:
-        payload = json.loads(sys.stdin.read())
+        payload = _read_payload_from_env_or_stdin()
     except json.JSONDecodeError as exc:
         print(f"invalid execution payload: {exc}", file=sys.stderr)
         return 2
@@ -40,8 +42,28 @@ def main() -> int:
         print(f"plugin function failed: {exc}", file=sys.stderr)
         return 1
 
-    print(json.dumps(result, ensure_ascii=False))
+    try:
+        _write_result(result)
+    except Exception as exc:
+        print(f"failed to write plugin result: {exc}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _read_payload_from_env_or_stdin() -> dict[str, Any]:
+    input_file = os.getenv("IPP_INPUT_FILE", "").strip()
+    if input_file:
+        return json.loads(Path(input_file).read_text(encoding="utf-8"))
+    return json.loads(sys.stdin.read())
+
+
+def _write_result(result: Any) -> None:
+    result_json = json.dumps(result, ensure_ascii=False)
+    result_file = os.getenv("IPP_RESULT_FILE", "").strip()
+    if result_file:
+        Path(result_file).write_text(result_json, encoding="utf-8")
+        return
+    print(result_json)
 
 
 def _call_function(
@@ -52,7 +74,8 @@ def _call_function(
 ) -> Any:
     module = _load_entry_module(package_dir, entry_path)
     func = getattr(module, callable_name)
-    return func(payload)
+    with contextlib.redirect_stdout(sys.stderr):
+        return func(payload)
 
 
 def _load_entry_module(package_dir: Path, entry_path: Path):

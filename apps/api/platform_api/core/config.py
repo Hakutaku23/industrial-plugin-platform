@@ -44,7 +44,6 @@ def _load_json_file(path: Path) -> dict[str, Any]:
 def _load_structured_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-
     suffixes = [suffix.lower() for suffix in path.suffixes]
     if suffixes and suffixes[-1] in {'.yaml', '.yml'}:
         return _load_yaml_file(path)
@@ -118,17 +117,37 @@ class MetadataSettings(BaseModel):
 
 class SchedulerSettings(BaseModel):
     enabled: bool = True
+    mode: str = 'rust-daemon'
     poll_interval_sec: float = 1.0
     max_workers: int = 4
     lock_ttl_sec: int = 300
     redis_url: str | None = None
     lock_key_prefix: str = 'lock:instance'
+    daemon_binary_path: Path | None = None
+    daemon_tick_interval_ms: int = 200
+    daemon_idle_min_interval_ms: int = 1000
+    daemon_idle_max_interval_ms: int = 5000
+    daemon_error_backoff_ms: int = 2000
+    daemon_max_due_batch: int = 50
+    daemon_max_parallel_dispatch: int = 4
+    internal_base_url: str = 'http://127.0.0.1:8000'
+    internal_token: str = 'dev-scheduler-token'
+    internal_request_timeout_sec: float = 30.0
+    recovery_interval_sec: int = 15
 
 
 class RunnerSettings(BaseModel):
     default_timeout_sec: int = 30
     max_timeout_sec: int = 300
     work_root: Path = Path('var/runs')
+    binary_path: Path | None = None
+    python_executable: str | None = None
+    cleanup_enabled: bool = True
+    cleanup_min_keep_runs: int = 20
+    cleanup_max_run_dirs: int = 500
+    cleanup_max_age_sec: int = 7 * 24 * 60 * 60
+    cleanup_stale_incomplete_age_sec: int = 24 * 60 * 60
+    cleanup_sweep_interval_sec: int = 600
 
 
 class LoggingSettings(BaseModel):
@@ -225,7 +244,6 @@ def _first_existing(*paths: Path) -> Path | None:
 
 def _load_raw_config(project_root: Path) -> dict[str, Any]:
     config: dict[str, Any] = {}
-
     base_file = _first_existing(
         project_root / 'config/platform.yaml',
         project_root / 'config/platform.yml',
@@ -233,11 +251,9 @@ def _load_raw_config(project_root: Path) -> dict[str, Any]:
     )
     if base_file is not None:
         config = _deep_merge(config, _load_structured_file(base_file))
-
     environment = _env_str('PLATFORM_ENVIRONMENT') or (
         config.get('app', {}).get('environment') if isinstance(config.get('app'), dict) else None
     ) or 'dev'
-
     env_file = _first_existing(
         project_root / f'config/platform.{environment}.yaml',
         project_root / f'config/platform.{environment}.yml',
@@ -245,11 +261,9 @@ def _load_raw_config(project_root: Path) -> dict[str, Any]:
     )
     if env_file is not None:
         config = _deep_merge(config, _load_structured_file(env_file))
-
     explicit_file = _env_str('PLATFORM_CONFIG_FILE')
     if explicit_file:
         config = _deep_merge(config, _load_structured_file(_resolve_path(project_root, explicit_file)))
-
     return config
 
 
@@ -263,13 +277,23 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ('PLATFORM_METADATA_DB_PATH', ('metadata', 'sqlite_path'), _env_str('PLATFORM_METADATA_DB_PATH')),
         ('PLATFORM_METADATA_DB_URL', ('metadata', 'db_url'), _env_str('PLATFORM_METADATA_DB_URL')),
         ('PLATFORM_SCHEDULER_ENABLED', ('scheduler', 'enabled'), _env_bool('PLATFORM_SCHEDULER_ENABLED')),
+        ('PLATFORM_SCHEDULER_MODE', ('scheduler', 'mode'), _env_str('PLATFORM_SCHEDULER_MODE')),
         ('PLATFORM_SCHEDULER_POLL_INTERVAL_SEC', ('scheduler', 'poll_interval_sec'), _env_float('PLATFORM_SCHEDULER_POLL_INTERVAL_SEC')),
         ('PLATFORM_SCHEDULER_MAX_WORKERS', ('scheduler', 'max_workers'), _env_int('PLATFORM_SCHEDULER_MAX_WORKERS')),
         ('PLATFORM_SCHEDULER_LOCK_TTL_SEC', ('scheduler', 'lock_ttl_sec'), _env_int('PLATFORM_SCHEDULER_LOCK_TTL_SEC')),
         ('PLATFORM_SCHEDULER_REDIS_URL', ('scheduler', 'redis_url'), _env_str('PLATFORM_SCHEDULER_REDIS_URL')),
         ('PLATFORM_SCHEDULER_LOCK_KEY_PREFIX', ('scheduler', 'lock_key_prefix'), _env_str('PLATFORM_SCHEDULER_LOCK_KEY_PREFIX')),
+        ('PLATFORM_SCHEDULER_DAEMON_BINARY_PATH', ('scheduler', 'daemon_binary_path'), _env_str('PLATFORM_SCHEDULER_DAEMON_BINARY_PATH')),
+        ('PLATFORM_SCHEDULER_TICK_INTERVAL_MS', ('scheduler', 'daemon_tick_interval_ms'), _env_int('PLATFORM_SCHEDULER_TICK_INTERVAL_MS')),
+        ('PLATFORM_SCHEDULER_MAX_DUE_BATCH', ('scheduler', 'daemon_max_due_batch'), _env_int('PLATFORM_SCHEDULER_MAX_DUE_BATCH')),
+        ('PLATFORM_SCHEDULER_MAX_PARALLEL_DISPATCH', ('scheduler', 'daemon_max_parallel_dispatch'), _env_int('PLATFORM_SCHEDULER_MAX_PARALLEL_DISPATCH')),
+        ('PLATFORM_SCHEDULER_INTERNAL_BASE_URL', ('scheduler', 'internal_base_url'), _env_str('PLATFORM_SCHEDULER_INTERNAL_BASE_URL')),
+        ('PLATFORM_SCHEDULER_INTERNAL_TOKEN', ('scheduler', 'internal_token'), _env_str('PLATFORM_SCHEDULER_INTERNAL_TOKEN')),
+        ('PLATFORM_SCHEDULER_INTERNAL_REQUEST_TIMEOUT_SEC', ('scheduler', 'internal_request_timeout_sec'), _env_float('PLATFORM_SCHEDULER_INTERNAL_REQUEST_TIMEOUT_SEC')),
         ('PLATFORM_RUNNER_DEFAULT_TIMEOUT_SEC', ('runner', 'default_timeout_sec'), _env_int('PLATFORM_RUNNER_DEFAULT_TIMEOUT_SEC')),
         ('PLATFORM_RUNNER_MAX_TIMEOUT_SEC', ('runner', 'max_timeout_sec'), _env_int('PLATFORM_RUNNER_MAX_TIMEOUT_SEC')),
+        ('PLATFORM_RUNNER_BINARY_PATH', ('runner', 'binary_path'), _env_str('PLATFORM_RUNNER_BINARY_PATH')),
+        ('PLATFORM_RUNNER_PYTHON_EXECUTABLE', ('runner', 'python_executable'), _env_str('PLATFORM_RUNNER_PYTHON_EXECUTABLE')),
         ('PLATFORM_CONNECTOR_RETRY_MAX_ATTEMPTS', ('connectors', 'retry', 'max_attempts'), _env_int('PLATFORM_CONNECTOR_RETRY_MAX_ATTEMPTS')),
         ('PLATFORM_CONNECTOR_RETRY_BASE_DELAY_SEC', ('connectors', 'retry', 'base_delay_sec'), _env_float('PLATFORM_CONNECTOR_RETRY_BASE_DELAY_SEC')),
         ('PLATFORM_CONNECTOR_RETRY_MAX_DELAY_SEC', ('connectors', 'retry', 'max_delay_sec'), _env_float('PLATFORM_CONNECTOR_RETRY_MAX_DELAY_SEC')),
@@ -295,7 +319,6 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
 
 def _resolve_path_fields(project_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     result = _deep_merge({}, payload)
-
     storage = result.setdefault('storage', {})
     storage['package_storage_dir'] = str(
         _resolve_path(project_root, storage.get('package_storage_dir', 'var/packages'))
@@ -303,14 +326,18 @@ def _resolve_path_fields(project_root: Path, payload: dict[str, Any]) -> dict[st
     storage['run_storage_dir'] = str(
         _resolve_path(project_root, storage.get('run_storage_dir', 'var/runs'))
     )
-
     metadata = result.setdefault('metadata', {})
     sqlite_path = metadata.get('sqlite_path', 'var/platform.sqlite3')
     metadata['sqlite_path'] = str(_resolve_path(project_root, sqlite_path))
-
     runner = result.setdefault('runner', {})
     runner['work_root'] = str(_resolve_path(project_root, runner.get('work_root', 'var/runs')))
-
+    binary_path = runner.get('binary_path')
+    if binary_path:
+        runner['binary_path'] = str(_resolve_path(project_root, binary_path))
+    scheduler = result.setdefault('scheduler', {})
+    daemon_binary_path = scheduler.get('daemon_binary_path')
+    if daemon_binary_path:
+        scheduler['daemon_binary_path'] = str(_resolve_path(project_root, daemon_binary_path))
     ui = result.setdefault('ui', {})
     ui['dist_dir'] = str(_resolve_path(project_root, ui.get('dist_dir', 'frontend/dist')))
     return result
