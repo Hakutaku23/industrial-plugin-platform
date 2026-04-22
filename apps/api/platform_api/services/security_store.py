@@ -72,6 +72,30 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
     ],
 }
 
+PERMISSION_DISPLAY: dict[str, dict[str, str]] = {
+    'system.read': {'module_label': '系统', 'action_label': '查看运行状态', 'description': '查看系统运行状态、前端模式和调度状态'},
+    'package.read': {'module_label': '插件包', 'action_label': '查看', 'description': '查看插件包和插件版本'},
+    'package.upload': {'module_label': '插件包', 'action_label': '上传', 'description': '上传并登记新的插件包'},
+    'package.delete': {'module_label': '插件包', 'action_label': '删除', 'description': '删除已登记的插件包'},
+    'instance.read': {'module_label': '实例', 'action_label': '查看', 'description': '查看插件运行实例'},
+    'instance.create': {'module_label': '实例', 'action_label': '创建', 'description': '创建新的插件运行实例'},
+    'instance.update': {'module_label': '实例', 'action_label': '修改', 'description': '修改插件实例配置和绑定'},
+    'instance.delete': {'module_label': '实例', 'action_label': '删除', 'description': '删除插件运行实例'},
+    'instance.run': {'module_label': '实例', 'action_label': '手动运行', 'description': '手动触发插件实例或插件版本运行'},
+    'instance.schedule.update': {'module_label': '实例', 'action_label': '调整定时', 'description': '启动、停止或修改实例定时运行'},
+    'datasource.read': {'module_label': '数据源', 'action_label': '查看', 'description': '查看数据源和点位配置'},
+    'datasource.create': {'module_label': '数据源', 'action_label': '创建', 'description': '创建新的数据源配置'},
+    'datasource.update': {'module_label': '数据源', 'action_label': '修改', 'description': '修改数据源和点位配置'},
+    'datasource.delete': {'module_label': '数据源', 'action_label': '删除', 'description': '删除数据源配置'},
+    'run.read': {'module_label': '运行记录', 'action_label': '查看', 'description': '查看运行记录、日志和回写记录'},
+    'audit.read': {'module_label': '审计', 'action_label': '查看', 'description': '查看审计事件'},
+    'user.read': {'module_label': '用户', 'action_label': '查看', 'description': '查看用户和角色'},
+    'user.create': {'module_label': '用户', 'action_label': '创建', 'description': '创建用户账号'},
+    'user.update': {'module_label': '用户', 'action_label': '修改', 'description': '修改用户资料、状态或密码'},
+    'user.assign_roles': {'module_label': '用户', 'action_label': '分配角色', 'description': '调整用户角色'},
+    'role.read': {'module_label': '角色', 'action_label': '查看', 'description': '查看角色和权限集合'},
+}
+
 _UNSET = object()
 
 
@@ -209,17 +233,21 @@ class SecurityStore:
                     if code in permission_by_code:
                         continue
                     permission = session.scalar(select(PermissionModel).where(PermissionModel.code == code))
+                    display = _permission_display(code)
                     if permission is None:
                         module = code.split('.', 1)[0]
                         permission = PermissionModel(
                             code=code,
-                            description=f'{code} permission',
+                            description=display['description'],
                             module=module,
                             created_at=now,
                             updated_at=now,
                         )
                         session.add(permission)
                         session.flush()
+                    elif permission.description != display['description']:
+                        permission.description = display['description']
+                        permission.updated_at = now
                     permission_by_code[code] = permission
 
             for role_name, permission_codes in DEFAULT_ROLE_PERMISSIONS.items():
@@ -329,14 +357,7 @@ class SecurityStore:
         with self.session_factory() as session:
             rows = session.scalars(select(PermissionModel).order_by(PermissionModel.module, PermissionModel.code)).all()
             return [
-                {
-                    'id': row.id,
-                    'code': row.code,
-                    'description': row.description,
-                    'module': row.module,
-                    'created_at': row.created_at.isoformat(),
-                    'updated_at': row.updated_at.isoformat(),
-                }
+                self._serialize_permission(row)
                 for row in rows
             ]
 
@@ -587,8 +608,35 @@ class SecurityStore:
             'updated_at': role.updated_at.isoformat(),
         }
 
+    def _serialize_permission(self, permission: PermissionModel) -> dict[str, Any]:
+        display = _permission_display(permission.code)
+        return {
+            'id': permission.id,
+            'code': permission.code,
+            'label': display['label'],
+            'description': display['description'],
+            'module': permission.module,
+            'module_label': display['module_label'],
+            'action_label': display['action_label'],
+            'created_at': permission.created_at.isoformat(),
+            'updated_at': permission.updated_at.isoformat(),
+        }
+
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _permission_display(code: str) -> dict[str, str]:
+    fallback_module, _, fallback_action = code.partition('.')
+    display = PERMISSION_DISPLAY.get(code, {})
+    module_label = display.get('module_label') or fallback_module
+    action_label = display.get('action_label') or fallback_action or code
+    return {
+        'module_label': module_label,
+        'action_label': action_label,
+        'label': f'{module_label} / {action_label}',
+        'description': display.get('description') or f'{module_label} / {action_label}',
+    }

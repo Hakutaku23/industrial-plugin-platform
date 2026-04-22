@@ -25,10 +25,38 @@ const passwordForm = ref({
 const ownedPermissions = ref<PermissionRecord[]>([])
 const missingPermissions = ref<PermissionRecord[]>([])
 
+interface PermissionGroup {
+  module: string
+  moduleLabel: string
+  items: PermissionRecord[]
+}
+
 const avatarText = computed(() => {
   const source = profileForm.value.display_name || auth.user?.username || 'U'
   return source.trim().slice(0, 1).toUpperCase()
 })
+const ownedPermissionGroups = computed(() => groupPermissions(ownedPermissions.value))
+const missingPermissionGroups = computed(() => groupPermissions(missingPermissions.value))
+
+function groupPermissions(items: PermissionRecord[]): PermissionGroup[] {
+  const groups = new Map<string, PermissionGroup>()
+  for (const item of items) {
+    const key = item.module || item.code.split('.')[0] || 'other'
+    const moduleLabel = item.module_label || key
+    if (!groups.has(key)) {
+      groups.set(key, { module: key, moduleLabel, items: [] })
+    }
+    groups.get(key)?.items.push(item)
+  }
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    items: [...group.items].sort((a, b) => permissionTitle(a).localeCompare(permissionTitle(b), 'zh-Hans-CN')),
+  }))
+}
+
+function permissionTitle(item: PermissionRecord): string {
+  return item.label || [item.module_label, item.action_label].filter(Boolean).join(' / ') || item.code
+}
 
 function hydrateProfile() {
   profileForm.value = {
@@ -194,12 +222,19 @@ onMounted(async () => {
                 <strong>已拥有权限</strong>
                 <span>{{ ownedPermissions.length }}</span>
               </header>
-              <div class="permission-list">
-                <div v-for="item in ownedPermissions" :key="item.code" class="permission-item">
-                  <span class="permission-icon success">✔</span>
-                  <div>
-                    <strong>{{ item.code }}</strong>
-                    <p>{{ item.description }}</p>
+              <div class="permission-list grouped">
+                <div v-for="group in ownedPermissionGroups" :key="group.module" class="permission-group">
+                  <div class="permission-group-title">
+                    <strong>{{ group.moduleLabel }}</strong>
+                    <span>{{ group.items.length }}</span>
+                  </div>
+                  <div v-for="item in group.items" :key="item.code" class="permission-item">
+                    <span class="permission-icon success">✓</span>
+                    <div>
+                      <strong>{{ permissionTitle(item) }}</strong>
+                      <code>{{ item.code }}</code>
+                      <p>{{ item.description }}</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -210,12 +245,19 @@ onMounted(async () => {
                 <strong>未拥有权限</strong>
                 <span>{{ missingPermissions.length }}</span>
               </header>
-              <div class="permission-list">
-                <div v-for="item in missingPermissions" :key="item.code" class="permission-item">
-                  <span class="permission-icon danger">✘</span>
-                  <div>
-                    <strong>{{ item.code }}</strong>
-                    <p>{{ item.description }}</p>
+              <div class="permission-list grouped">
+                <div v-for="group in missingPermissionGroups" :key="group.module" class="permission-group">
+                  <div class="permission-group-title">
+                    <strong>{{ group.moduleLabel }}</strong>
+                    <span>{{ group.items.length }}</span>
+                  </div>
+                  <div v-for="item in group.items" :key="item.code" class="permission-item">
+                    <span class="permission-icon danger">×</span>
+                    <div>
+                      <strong>{{ permissionTitle(item) }}</strong>
+                      <code>{{ item.code }}</code>
+                      <p>{{ item.description }}</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -248,7 +290,12 @@ onMounted(async () => {
 .permission-column { border: 1px solid #e6ece9; border-radius: 10px; background: #fbfdfc; overflow: hidden; }
 .permission-column header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #e6ece9; background: #f7faf9; }
 .permission-list { display: grid; gap: 10px; padding: 14px; }
+.permission-list.grouped { gap: 14px; }
+.permission-group { display: grid; gap: 8px; }
+.permission-group-title { display: flex; align-items: center; justify-content: space-between; color: #2f403d; font-size: 14px; }
+.permission-group-title span { color: #6b7c78; font-size: 12px; }
 .permission-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid #e6ece9; border-radius: 8px; background: #ffffff; }
+.permission-item code { display: inline-block; margin-top: 4px; color: #6b7c78; font-size: 12px; word-break: break-all; }
 .permission-item p { margin: 4px 0 0; color: #5e6f6c; font-size: 13px; }
 .permission-icon { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .permission-icon.success { background: #dcfce7; color: #166534; }
