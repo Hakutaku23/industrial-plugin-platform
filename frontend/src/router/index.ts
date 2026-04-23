@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/auth'
 import { pinia } from '../stores/pinia'
 import AdminUsers from '../views/AdminUsers.vue'
 import DataSources from '../views/DataSources.vue'
+import HomeCenter from '../views/HomeCenter.vue'
 import Instances from '../views/Instances.vue'
 import LicenseCenter from '../views/LicenseCenter.vue'
 import Login from '../views/Login.vue'
@@ -16,7 +17,9 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: Login, meta: { public: true } },
-    { path: '/', name: 'plugin-upload', component: PluginUpload, meta: { permission: 'package.read' } },
+    { path: '/', name: 'home-center', component: HomeCenter, meta: { permission: 'package.read' } },
+    { path: '/home', redirect: '/' },
+    { path: '/packages/upload', name: 'plugin-upload', component: PluginUpload, meta: { permission: 'package.read' } },
     { path: '/packages', name: 'plugin-list', component: PluginList, meta: { permission: 'package.read' } },
     { path: '/data-sources', name: 'data-sources', component: DataSources, meta: { permission: 'datasource.read' } },
     { path: '/instances', name: 'instances', component: Instances, meta: { permission: 'instance.read' } },
