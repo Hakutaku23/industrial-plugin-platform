@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 from platform_api.api.common import store
 from platform_api.security import Principal, require_permission
 from platform_api.services.execution import PluginExecutionError, execute_plugin_instance_locked
+from platform_api.services.license_guard import (
+    LicenseGuardError,
+    ensure_instance_create_allowed,
+    ensure_schedule_enabled_allowed,
+)
 
 router = APIRouter(prefix='/api/v1', tags=['instances'])
 
@@ -35,6 +40,11 @@ def upsert_plugin_instance(
     principal: Principal = Depends(require_permission('instance.create')),
 ) -> dict[str, object]:
     metadata_store = store()
+    try:
+        ensure_instance_create_allowed(store=metadata_store)
+        ensure_schedule_enabled_allowed(enabled=request.schedule_enabled)
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     result = metadata_store.upsert_plugin_instance(
         name=request.name,
         package_name=request.package_name,
@@ -68,6 +78,10 @@ def update_plugin_instance(
     principal: Principal = Depends(require_permission('instance.update')),
 ) -> dict[str, object]:
     metadata_store = store()
+    try:
+        ensure_schedule_enabled_allowed(enabled=request.schedule_enabled)
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     result = metadata_store.update_plugin_instance(
         instance_id=instance_id,
         name=request.name,
@@ -107,6 +121,10 @@ def update_plugin_instance_schedule(
     principal: Principal = Depends(require_permission('instance.schedule.update')),
 ) -> dict[str, object]:
     metadata_store = store()
+    try:
+        ensure_schedule_enabled_allowed(enabled=request.enabled)
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     result = metadata_store.set_plugin_instance_schedule(
         instance_id=instance_id,
         enabled=request.enabled,
@@ -151,6 +169,8 @@ def run_plugin_instance(
         result = execute_plugin_instance_locked(instance_id=instance_id)
     except PluginExecutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     store().record_audit_event(
         event_type='security.instance.run_triggered',
         target_type='plugin_instance',

@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 from typing import Any
@@ -191,6 +190,18 @@ class SecuritySettings(BaseModel):
     bootstrap_admin_email: str | None = None
 
 
+class LicenseSettings(BaseModel):
+    enabled: bool = True
+    storage_dir: Path = Path('var/license')
+    license_file_name: str = 'license.lic'
+    state_file_name: str = 'state.json'
+    installation_id_file_name: str = 'installation_id'
+    public_keys_file: Path = Path('config/license_public_keys.json')
+    cache_ttl_sec: int = 5
+    machine_id_paths: list[str] = Field(default_factory=lambda: ['/host/etc/machine-id', '/etc/machine-id'])
+    hostname_paths: list[str] = Field(default_factory=lambda: ['/host/etc/hostname', '/etc/hostname'])
+
+
 class UISettings(BaseModel):
     serve_dist: bool = True
     dist_dir: Path = Path('frontend/dist')
@@ -207,6 +218,7 @@ class Settings(BaseModel):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     connectors: ConnectorSettings = Field(default_factory=ConnectorSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    license: LicenseSettings = Field(default_factory=LicenseSettings)
     ui: UISettings = Field(default_factory=UISettings)
 
     @property
@@ -325,6 +337,9 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_USERNAME', ('security', 'bootstrap_admin_username'), _env_str('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_USERNAME')),
         ('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_PASSWORD', ('security', 'bootstrap_admin_password'), _env_str('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_PASSWORD')),
         ('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_EMAIL', ('security', 'bootstrap_admin_email'), _env_str('PLATFORM_SECURITY_BOOTSTRAP_ADMIN_EMAIL')),
+        ('PLATFORM_LICENSE_ENABLED', ('license', 'enabled'), _env_bool('PLATFORM_LICENSE_ENABLED')),
+        ('PLATFORM_LICENSE_STORAGE_DIR', ('license', 'storage_dir'), _env_str('PLATFORM_LICENSE_STORAGE_DIR')),
+        ('PLATFORM_LICENSE_PUBLIC_KEYS_FILE', ('license', 'public_keys_file'), _env_str('PLATFORM_LICENSE_PUBLIC_KEYS_FILE')),
         ('PLATFORM_UI_SERVE_DIST', ('ui', 'serve_dist'), _env_bool('PLATFORM_UI_SERVE_DIST')),
         ('PLATFORM_UI_DIST_DIR', ('ui', 'dist_dir'), _env_str('PLATFORM_UI_DIST_DIR')),
     ]
@@ -351,6 +366,10 @@ def _resolve_path_fields(project_root: Path, payload: dict[str, Any]) -> dict[st
 
     runner = result.setdefault('runner', {})
     runner['work_root'] = str(_resolve_path(project_root, runner.get('work_root', 'var/runs')))
+
+    license_section = result.setdefault('license', {})
+    license_section['storage_dir'] = str(_resolve_path(project_root, license_section.get('storage_dir', 'var/license')))
+    license_section['public_keys_file'] = str(_resolve_path(project_root, license_section.get('public_keys_file', 'config/license_public_keys.json')))
 
     ui = result.setdefault('ui', {})
     ui['dist_dir'] = str(_resolve_path(project_root, ui.get('dist_dir', 'frontend/dist')))

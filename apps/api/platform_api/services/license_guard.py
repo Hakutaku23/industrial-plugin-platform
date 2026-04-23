@@ -1,90 +1,71 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, status
-
-from platform_api.api.common import store
-from platform_api.services.license_manager import get_license_manager
+from platform_api.services.license_manager import license_manager
 from platform_api.services.metadata_store import MetadataStore
 
 
-class LicenseDeniedError(RuntimeError):
-    def __init__(self, code: str, message: str, details: dict | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.details = details or {}
+class LicenseGuardError(PermissionError):
+    pass
 
 
-READONLY_STATUSES = {
-    'VALID_GRACE',
-    'INVALID_SIGNATURE',
-    'INVALID_SCHEMA',
-    'INVALID_PRODUCT',
-    'INVALID_VERSION_RANGE',
-    'INVALID_SUBJECT',
-    'NOT_YET_VALID',
-    'EXPIRED',
-    'TIME_ROLLBACK_SUSPECTED',
-    'LICENSE_NOT_FOUND',
-    'INTERNAL_ERROR',
-}
+def _require_valid_base():
+    snapshot = license_manager.get_snapshot()
+    if snapshot.valid:
+        return snapshot
+    raise LicenseGuardError(f'License denied: {snapshot.status.value} - {snapshot.message}')
 
 
-def _manager_snapshot() -> dict:
-    return get_license_manager().snapshot()
+def ensure_instance_create_allowed(*, store: MetadataStore):
+    snapshot = _require_valid_base()
+    limit = snapshot.entitlements.get('max_instances')
+    if limit is not None and len(store.list_plugin_instances()) >= int(limit):
+        raise LicenseGuardError(f'Instance quota exceeded: max_instances={limit}')
+    return snapshot
 
 
-def assert_feature(feature: str) -> None:
-    snapshot = _manager_snapshot()
-    if snapshot['status'] in READONLY_STATUSES:
-        raise LicenseDeniedError('E_LICENSE_FEATURE_DENIED', f'license status does not allow operation: {snapshot["status"]}', {'feature': feature, 'license_status': snapshot['status']})
-    entitlements = snapshot.get('entitlements') or {}
-    if not entitlements.get(feature, False):
-        raise LicenseDeniedError('E_LICENSE_FEATURE_DENIED', f'license does not allow feature: {feature}', {'feature': feature, 'license_status': snapshot['status']})
+def ensure_package_upload_allowed(*, store: MetadataStore):
+    snapshot = _require_valid_base()
+    limit = snapshot.entitlements.get('max_packages')
+    if limit is not None and len(store.list_plugin_packages()) >= int(limit):
+        raise LicenseGuardError(f'Package quota exceeded: max_packages={limit}')
+    return snapshot
 
 
-def assert_quota(quota_name: str, current: int) -> None:
-    snapshot = _manager_snapshot()
-    quotas = snapshot.get('quotas') or {}
-    limit = quotas.get(quota_name)
-    if limit is None:
-        return
-    if int(current) >= int(limit):
-        raise LicenseDeniedError('E_LICENSE_QUOTA_EXCEEDED', f'quota exceeded: {quota_name}', {'quota_name': quota_name, 'quota_limit': limit, 'quota_current': current})
+def ensure_data_source_create_allowed(*, store: MetadataStore):
+    snapshot = _require_valid_base()
+    limit = snapshot.entitlements.get('max_data_sources')
+    if limit is not None and len(store.list_data_sources()) >= int(limit):
+        raise LicenseGuardError(f'Data source quota exceeded: max_data_sources={limit}')
+    return snapshot
 
 
-def assert_instance_create_allowed(metadata_store: MetadataStore | None = None) -> None:
-    assert_feature('allow_instance_create')
-    items = (metadata_store or store()).list_plugin_instances()
-    assert_quota('max_instances', len(items))
+def ensure_manual_run_allowed():
+    snapshot = _require_valid_base()
+    if not bool(snapshot.entitlements.get('allow_manual_run', True)):
+        raise LicenseGuardError('License does not allow manual execution')
+    return snapshot
 
 
-def assert_instance_run_allowed() -> None:
-    assert_feature('allow_instance_run')
+def ensure_schedule_enabled_allowed(*, enabled: bool):
+    snapshot = license_manager.get_snapshot()
+    if not enabled:
+        return snapshot
+    if not snapshot.valid:
+        raise LicenseGuardError(f'License denied: {snapshot.status.value} - {snapshot.message}')
+    if not bool(snapshot.entitlements.get('allow_schedule', True)):
+        raise LicenseGuardError('License does not allow schedule enablement')
+    return snapshot
 
 
-def assert_schedule_allowed(metadata_store: MetadataStore | None = None, *, enabling: bool = True) -> None:
-    if not enabling:
-        return
-    assert_feature('allow_schedule')
-    items = (metadata_store or store()).list_plugin_instances()
-    scheduled = len([item for item in items if item.get('schedule_enabled')])
-    assert_quota('max_scheduled_instances', scheduled)
+def ensure_schedule_dispatch_allowed():
+    snapshot = _require_valid_base()
+    if not bool(snapshot.entitlements.get('allow_schedule', True)):
+        raise LicenseGuardError('License does not allow scheduled dispatch')
+    return snapshot
 
 
-def can_real_writeback() -> bool:
-    snapshot = _manager_snapshot()
-    if snapshot['status'] != 'VALID':
-        return False
-    entitlements = snapshot.get('entitlements') or {}
-    return bool(entitlements.get('allow_real_writeback', False))
-
-
-def is_scheduler_allowed() -> bool:
-    snapshot = _manager_snapshot()
-    if snapshot['status'] != 'VALID':
-        return False
-    return bool((snapshot.get('entitlements') or {}).get('allow_schedule', False))
-
-
-def to_http_exception(exc: LicenseDeniedError) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={'code': exc.code, 'message': str(exc), 'details': exc.details})
+def ensure_writeback_allowed():
+    snapshot = _require_valid_base()
+    if not bool(snapshot.entitlements.get('allow_real_writeback', True)):
+        raise LicenseGuardError('License does not allow real writeback')
+    return snapshot

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from platform_api.api.common import client_ip, store
 from platform_api.security import Principal, require_permission
+from platform_api.services.license_guard import LicenseGuardError, ensure_data_source_create_allowed
 
 router = APIRouter(prefix='/api/v1', tags=['data-sources'])
 
@@ -20,12 +21,10 @@ class DataSourceRequest(BaseModel):
 
 
 @router.post('/data-sources', status_code=status.HTTP_201_CREATED)
-def create_data_source(
-    request: DataSourceRequest,
-    principal: Principal = Depends(require_permission('datasource.create')),
-) -> dict[str, object]:
+def create_data_source(request: DataSourceRequest, principal: Principal = Depends(require_permission('datasource.create'))) -> dict[str, object]:
     metadata_store = store()
     try:
+        ensure_data_source_create_allowed(store=metadata_store)
         result = metadata_store.create_data_source(
             name=request.name,
             connector_type=request.connector_type,
@@ -35,6 +34,8 @@ def create_data_source(
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     metadata_store.record_audit_event(
         event_type='security.datasource.created',
         target_type='data_source',
@@ -42,20 +43,11 @@ def create_data_source(
         actor=principal.username,
         details={'name': result.name, 'connector_type': result.connector_type},
     )
-    return {
-        'id': result.id,
-        'name': result.name,
-        'connector_type': result.connector_type,
-        'status': result.status,
-    }
+    return {'id': result.id, 'name': result.name, 'connector_type': result.connector_type, 'status': result.status}
 
 
 @router.put('/data-sources/{data_source_id}')
-def update_data_source(
-    data_source_id: int,
-    request: DataSourceRequest,
-    principal: Principal = Depends(require_permission('datasource.update')),
-) -> dict[str, object]:
+def update_data_source(data_source_id: int, request: DataSourceRequest, principal: Principal = Depends(require_permission('datasource.update'))) -> dict[str, object]:
     metadata_store = store()
     try:
         result = metadata_store.update_data_source(
@@ -77,12 +69,7 @@ def update_data_source(
         actor=principal.username,
         details={'name': result.name, 'connector_type': result.connector_type},
     )
-    return {
-        'id': result.id,
-        'name': result.name,
-        'connector_type': result.connector_type,
-        'status': result.status,
-    }
+    return {'id': result.id, 'name': result.name, 'connector_type': result.connector_type, 'status': result.status}
 
 
 @router.get('/data-sources')
@@ -91,11 +78,7 @@ def list_data_sources(principal: Principal = Depends(require_permission('datasou
 
 
 @router.delete('/data-sources/{data_source_id}', status_code=status.HTTP_204_NO_CONTENT)
-def delete_data_source(
-    data_source_id: int,
-    request: Request,
-    principal: Principal = Depends(require_permission('datasource.delete')),
-) -> None:
+def delete_data_source(data_source_id: int, request: Request, principal: Principal = Depends(require_permission('datasource.delete'))) -> None:
     metadata_store = store()
     deleted = metadata_store.delete_data_source(data_source_id)
     if not deleted:

@@ -94,7 +94,8 @@ async fn main() -> Result<()> {
 
 async fn daemon(config_json: String) -> Result<()> {
     let config: SchedulerConfig = serde_json::from_str(&config_json)?;
-    let client = build_client(&config)?;
+    let control_client = build_control_client(&config)?;
+    let execute_client = build_execute_client(&config)?;
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_dispatch.max(1)));
     let mut next_sleep_ms = 0_u64;
 
@@ -103,7 +104,7 @@ async fn daemon(config_json: String) -> Result<()> {
             tokio::time::sleep(Duration::from_millis(next_sleep_ms)).await;
         }
 
-        let due_response = match fetch_due_items(&client, &config).await {
+        let due_response = match fetch_due_items(&control_client, &config).await {
             Ok(response) => response,
             Err(err) => {
                 eprintln!("scheduler due fetch failed: {err}");
@@ -118,11 +119,12 @@ async fn daemon(config_json: String) -> Result<()> {
                 Ok(permit) => permit,
                 Err(_) => continue,
             };
-            let client = client.clone();
+            let control_client = control_client.clone();
+            let execute_client = execute_client.clone();
             let config = config.clone();
             tokio::spawn(async move {
                 let _permit = permit;
-                let _ = process_due_item(client, config, item).await;
+                let _ = process_due_item(control_client, execute_client, config, item).await;
             });
         }
 
@@ -130,15 +132,27 @@ async fn daemon(config_json: String) -> Result<()> {
     }
 }
 
-fn build_client(config: &SchedulerConfig) -> Result<Client> {
+fn build_default_headers(config: &SchedulerConfig) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-ipp-internal-token",
         HeaderValue::from_str(&config.internal_token)?,
     );
+    Ok(headers)
+}
+
+fn build_control_client(config: &SchedulerConfig) -> Result<Client> {
     Ok(Client::builder()
-        .default_headers(headers)
+        .default_headers(build_default_headers(config)?)
         .timeout(Duration::from_secs(config.request_timeout_sec.max(2)))
+        .build()?)
+}
+
+fn build_execute_client(config: &SchedulerConfig) -> Result<Client> {
+    // reqwest 0.12 不支持 `.timeout(None)`。
+    // 不显式设置 timeout 时，客户端默认不设置总请求超时，适合长时间执行的 `/execute` 调用。
+    Ok(Client::builder()
+        .default_headers(build_default_headers(config)?)
         .build()?)
 }
 
@@ -151,6 +165,7 @@ async fn fetch_due_items(client: &Client, config: &SchedulerConfig) -> Result<Du
     );
     let response = client.get(url).send().await?.error_for_status()?;
     let payload: DueResponse = response.json().await?;
+    let _ = payload.recovered_count;
     Ok(payload)
 }
 
@@ -170,12 +185,18 @@ fn compute_next_sleep_ms(config: &SchedulerConfig, payload: &DueResponse) -> u64
     idle_max
 }
 
-async fn process_due_item(client: Client, config: SchedulerConfig, item: DueItem) -> Result<()> {
+async fn process_due_item(
+    control_client: Client,
+    execute_client: Client,
+    config: SchedulerConfig,
+    item: DueItem,
+) -> Result<()> {
+    let _ = item.schedule_interval_sec;
     let claim_url = format!(
         "{}/api/v1/internal/scheduler/claim",
         config.base_url.trim_end_matches('/')
     );
-    let claim_response = client
+    let claim_response = control_client
         .post(claim_url)
         .json(&ClaimRequest {
             instance_id: item.id,
@@ -196,7 +217,7 @@ async fn process_due_item(client: Client, config: SchedulerConfig, item: DueItem
         "{}/api/v1/internal/scheduler/execute",
         config.base_url.trim_end_matches('/')
     );
-    let _ = client
+    execute_client
         .post(execute_url)
         .json(&ExecuteRequest {
             instance_id: item.id,
@@ -215,7 +236,7 @@ async fn process_due_item(client: Client, config: SchedulerConfig, item: DueItem
     if let (Some(lease_key), Some(lease_token)) =
         (claim_response.lease_key, claim_response.lease_token)
     {
-        let _ = client
+        control_client
             .post(complete_url)
             .json(&CompleteRequest {
                 instance_id: item.id,

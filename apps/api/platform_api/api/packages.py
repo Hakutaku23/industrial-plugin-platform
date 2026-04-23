@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response as RawResponse
+from pydantic import BaseModel, Field
 
 from platform_api.api.common import client_ip, store
 from platform_api.core.config import settings
 from platform_api.security import Principal, require_permission
 from platform_api.services.execution import PluginExecutionError, execute_plugin_version
+from platform_api.services.license_guard import LicenseGuardError, ensure_manual_run_allowed, ensure_package_upload_allowed
 from platform_api.services.package_storage import PackageStorage, PackageStorageError
 from platform_api.services.plugin_template import build_python_function_template_archive
-from pydantic import BaseModel, Field
 
 router = APIRouter(prefix='/api/v1', tags=['packages'])
 
@@ -35,6 +36,11 @@ async def upload_package(
     filename: str = Query(..., min_length=1),
     principal: Principal = Depends(require_permission('package.upload')),
 ) -> dict[str, object]:
+    metadata_store = store()
+    try:
+        ensure_package_upload_allowed(store=metadata_store)
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     content = await request.body()
     if not content:
         raise HTTPException(status_code=400, detail='package body is empty')
@@ -45,7 +51,6 @@ async def upload_package(
     except PackageStorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    metadata_store = store()
     registration = metadata_store.register_package_upload(record)
     metadata_store.record_audit_event(
         event_type='security.package.uploaded',
@@ -74,10 +79,7 @@ def list_packages(principal: Principal = Depends(require_permission('package.rea
 
 
 @router.get('/packages/{package_name}/versions')
-def list_package_versions(
-    package_name: str,
-    principal: Principal = Depends(require_permission('package.read')),
-) -> dict[str, object]:
+def list_package_versions(package_name: str, principal: Principal = Depends(require_permission('package.read'))) -> dict[str, object]:
     versions = store().list_plugin_versions(package_name)
     if versions is None:
         raise HTTPException(status_code=404, detail=f'plugin package not found: {package_name}')
@@ -85,11 +87,7 @@ def list_package_versions(
 
 
 @router.delete('/packages/{package_name}', status_code=status.HTTP_204_NO_CONTENT)
-def delete_package(
-    package_name: str,
-    request: Request,
-    principal: Principal = Depends(require_permission('package.delete')),
-) -> None:
+def delete_package(package_name: str, request: Request, principal: Principal = Depends(require_permission('package.delete'))) -> None:
     metadata_store = store()
     deleted = metadata_store.delete_plugin_package(package_name)
     if not deleted:
@@ -104,21 +102,14 @@ def delete_package(
 
 
 @router.post('/packages/{package_name}/versions/{version}/runs', status_code=status.HTTP_201_CREATED)
-def run_package_version(
-    package_name: str,
-    version: str,
-    request: RunRequest,
-    principal: Principal = Depends(require_permission('instance.run')),
-) -> dict[str, object]:
+def run_package_version(package_name: str, version: str, request: RunRequest, principal: Principal = Depends(require_permission('instance.run'))) -> dict[str, object]:
     try:
-        result = execute_plugin_version(
-            package_name=package_name,
-            version=version,
-            inputs=request.inputs,
-            config=request.config,
-        )
+        ensure_manual_run_allowed()
+        result = execute_plugin_version(package_name=package_name, version=version, inputs=request.inputs, config=request.config)
     except PluginExecutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LicenseGuardError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     store().record_audit_event(
         event_type='security.package_version.run_triggered',
         target_type='plugin_version',

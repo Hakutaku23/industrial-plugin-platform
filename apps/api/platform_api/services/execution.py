@@ -12,6 +12,11 @@ from platform_api.services.execution_lock import (
     RedisExecutionLockManager,
 )
 from platform_api.services.instance_validation import BindingValidationError, validate_execution_inputs
+from platform_api.services.license_guard import (
+    LicenseGuardError,
+    ensure_manual_run_allowed,
+    ensure_writeback_allowed,
+)
 from platform_api.services.manifest import PluginManifest
 from platform_api.services.metadata_store import MetadataStore, PluginInstanceModel
 from platform_api.services.runtime_bridge import RustRunnerBridge
@@ -35,6 +40,9 @@ def execute_plugin_version(
     store: MetadataStore | None = None,
     execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if trigger_type != 'schedule':
+        ensure_manual_run_allowed()
+
     metadata_store = store or MetadataStore(settings.metadata_database)
     version_record = metadata_store.get_plugin_version(package_name, version)
     if version_record is None:
@@ -94,17 +102,7 @@ def execute_plugin_version(
             fallback_started_at=started_at,
             fallback_finished_at=datetime.now(UTC),
         )
-        logs.append({
-            "source": "runner",
-            "level": "INFO",
-            "message": f"executor backend: {metrics.get('executor_backend')}"
-        })
-        if metrics.get('scheduler_backend') and trigger_type == 'schedule':
-            logs.append({
-                "source": "scheduler",
-                "level": "INFO",
-                "message": f"scheduler backend: {metrics.get('scheduler_backend')}; drift_ms={metrics.get('drift_ms')} queue_delay_ms={metrics.get('queue_delay_ms')}"
-            })
+        logs.append({"source": "runner", "level": "INFO", "message": f"executor backend: {metrics.get('executor_backend')}"})
         logs.extend({"source": "plugin", "level": "INFO", "message": message} for message in runner_result.logs)
         if runner_result.stderr:
             logs.append({"source": "plugin_stderr", "level": "WARN", "message": runner_result.stderr[-4000:]})
@@ -114,18 +112,12 @@ def execute_plugin_version(
     except subprocess.TimeoutExpired as exc:
         status = "TIMED_OUT"
         error = {"code": "E_TIMEOUT", "message": str(exc)}
-        metrics = {
-            'executor_backend': 'python_runner_timeout',
-            'scheduler_backend': _scheduler_backend_for_trigger(trigger_type),
-        }
+        metrics = {'executor_backend': 'timeout', 'scheduler_backend': _scheduler_backend_for_trigger(trigger_type)}
         logs.append({"source": "runner", "level": "ERROR", "message": "plugin execution timed out"})
-    except (RunnerExecutionError, RustRunnerBridgeError) as exc:
+    except (RunnerExecutionError, RustRunnerBridgeError, LicenseGuardError) as exc:
         status = "FAILED"
         error = {"code": "E_RUNTIME_FAILED", "message": str(exc)}
-        metrics = {
-            'executor_backend': 'runtime_error',
-            'scheduler_backend': _scheduler_backend_for_trigger(trigger_type),
-        }
+        metrics = {'executor_backend': 'runtime_error', 'scheduler_backend': _scheduler_backend_for_trigger(trigger_type)}
         logs.append({"source": "runner", "level": "ERROR", "message": str(exc)})
 
     finished_at = datetime.now(UTC)
@@ -149,13 +141,7 @@ def execute_plugin_version(
     return {"id": recorded.id, "run_id": recorded.run_id, "status": recorded.status, "outputs": outputs, "metrics": metrics, "error": error or {}}
 
 
-def execute_plugin_instance(
-    *,
-    instance_id: int,
-    trigger_type: str = "manual",
-    store: MetadataStore | None = None,
-    execution_context: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+def execute_plugin_instance(*, instance_id: int, trigger_type: str = "manual", store: MetadataStore | None = None, execution_context: dict[str, Any] | None = None) -> dict[str, Any]:
     metadata_store = store or MetadataStore(settings.metadata_database)
     instance = metadata_store.get_plugin_instance(instance_id)
     if instance is None:
@@ -178,7 +164,7 @@ def execute_plugin_instance(
             store=metadata_store,
             execution_context=execution_context,
         )
-    except PluginExecutionError as exc:
+    except (PluginExecutionError, LicenseGuardError) as exc:
         return _record_failed_instance_run(metadata_store=metadata_store, instance=instance, trigger_type=trigger_type, inputs=resolved_inputs, error_code="E_EXECUTION_SETUP_FAILED", error_message=str(exc))
 
     try:
@@ -189,13 +175,10 @@ def execute_plugin_instance(
     return {**result, "inputs": resolved_inputs, "writeback": writeback}
 
 
-def execute_plugin_instance_locked(
-    *,
-    instance_id: int,
-    trigger_type: str = "manual",
-    store: MetadataStore | None = None,
-    lock_manager: RedisExecutionLockManager | None = None,
-) -> dict[str, Any]:
+def execute_plugin_instance_locked(*, instance_id: int, trigger_type: str = "manual", store: MetadataStore | None = None, lock_manager: RedisExecutionLockManager | None = None) -> dict[str, Any]:
+    if trigger_type != 'schedule':
+        ensure_manual_run_allowed()
+
     metadata_store = store or MetadataStore(settings.metadata_database)
     manager = lock_manager or RedisExecutionLockManager.from_settings()
     ttl_sec = resolve_instance_lock_ttl_sec(instance_id=instance_id, store=metadata_store)
@@ -204,23 +187,13 @@ def execute_plugin_instance_locked(
         lease = manager.acquire(instance_id, ttl_sec=ttl_sec)
     except LockManagerError as exc:
         try:
-            metadata_store.record_audit_event(
-                event_type="plugin.instance.lock_error",
-                target_type="plugin_instance",
-                target_id=str(instance_id),
-                details={"message": str(exc), "phase": "acquire", "trigger_type": trigger_type},
-            )
+            metadata_store.record_audit_event(event_type="plugin.instance.lock_error", target_type="plugin_instance", target_id=str(instance_id), details={"message": str(exc), "phase": "acquire", "trigger_type": trigger_type})
         except Exception:
             pass
         raise PluginExecutionError(str(exc)) from exc
     if lease is None:
         try:
-            metadata_store.record_audit_event(
-                event_type="plugin.instance.lock_conflict",
-                target_type="plugin_instance",
-                target_id=str(instance_id),
-                details={"message": "plugin instance is already running", "trigger_type": trigger_type},
-            )
+            metadata_store.record_audit_event(event_type="plugin.instance.lock_conflict", target_type="plugin_instance", target_id=str(instance_id), details={"message": "plugin instance is already running", "trigger_type": trigger_type})
         except Exception:
             pass
         raise PluginExecutionError(f"plugin instance is already running: {instance_id}")
@@ -228,39 +201,22 @@ def execute_plugin_instance_locked(
     running_at = _db_now()
     _mark_instance_running(metadata_store, instance_id=instance_id, running_at=running_at)
     try:
-        return execute_plugin_instance(
-            instance_id=instance_id,
-            trigger_type=trigger_type,
-            store=metadata_store,
-        )
+        return execute_plugin_instance(instance_id=instance_id, trigger_type=trigger_type, store=metadata_store)
     finally:
         try:
-            _finalize_instance_after_execution(
-                metadata_store,
-                instance_id=instance_id,
-                finished_at=_db_now(),
-            )
+            _finalize_instance_after_execution(metadata_store, instance_id=instance_id, finished_at=_db_now())
         finally:
             try:
                 manager.release(lease)
             except LockManagerError as exc:
                 try:
-                    metadata_store.record_audit_event(
-                        event_type="plugin.instance.lock_error",
-                        target_type="plugin_instance",
-                        target_id=str(instance_id),
-                        details={"message": str(exc), "phase": "release", "trigger_type": trigger_type},
-                    )
+                    metadata_store.record_audit_event(event_type="plugin.instance.lock_error", target_type="plugin_instance", target_id=str(instance_id), details={"message": str(exc), "phase": "release", "trigger_type": trigger_type})
                 except Exception:
                     pass
                 raise
 
 
-def resolve_instance_lock_ttl_sec(
-    *,
-    instance_id: int,
-    store: MetadataStore | None = None,
-) -> int:
+def resolve_instance_lock_ttl_sec(*, instance_id: int, store: MetadataStore | None = None) -> int:
     metadata_store = store or MetadataStore(settings.metadata_database)
     ttl_sec = max(30, int(settings.scheduler.lock_ttl_sec))
     instance = metadata_store.get_plugin_instance(instance_id)
@@ -280,14 +236,7 @@ def resolve_instance_lock_ttl_sec(
     return max(ttl_sec, timeout_sec + 30)
 
 
-def _execute_via_runtime_bridge(
-    *,
-    package_dir: Path,
-    manifest: PluginManifest,
-    payload: dict[str, Any],
-    trigger_type: str,
-    run_id: str,
-) -> RustRunnerResult:
+def _execute_via_runtime_bridge(*, package_dir: Path, manifest: PluginManifest, payload: dict[str, Any], trigger_type: str, run_id: str) -> RustRunnerResult:
     try:
         bridge = RustRunnerBridge()
         return bridge.execute_function(
@@ -313,16 +262,7 @@ def _execute_via_runtime_bridge(
             payload=payload,
             timeout_sec=manifest.spec.runtime.timeout_sec,
         )
-        return RustRunnerResult(
-            status=local.status,
-            outputs=local.outputs,
-            logs=local.logs,
-            metrics=local.metrics,
-            stderr=local.stderr,
-            returncode=local.returncode,
-            backend='python_runner_fallback',
-            raw_status=local.status,
-        )
+        return RustRunnerResult(status=local.status, outputs=local.outputs, logs=local.logs, metrics=local.metrics, stderr=local.stderr, returncode=local.returncode, backend='python_runner_fallback', raw_status=local.status)
 
 
 def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict[str, Any], trigger_type: str, inputs: dict[str, Any], error_code: str, error_message: str) -> dict[str, Any]:
@@ -331,36 +271,11 @@ def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict
     if version_record is None:
         raise PluginExecutionError(f"plugin version not found for instance: {instance['package_name']}@{instance['version']}")
     run_id = f"run-{uuid.uuid4().hex}"
-    recorded = metadata_store.record_plugin_run(
-        run_id=run_id,
-        package_id=int(version_record["package_id"]),
-        version_id=int(version_record["id"]),
-        instance_id=int(instance["id"]),
-        trigger_type=trigger_type,
-        environment=settings.environment,
-        status="FAILED",
-        inputs=inputs,
-        outputs={},
-        metrics={
-            'executor_backend': 'not_run',
-            'scheduler_backend': _scheduler_backend_for_trigger(trigger_type),
-        },
-        logs=[{"source": "scheduler" if trigger_type == "schedule" else "runner", "level": "ERROR", "message": error_message}],
-        error={"code": error_code, "message": error_message},
-        started_at=started_at,
-        finished_at=datetime.now(UTC),
-    )
+    recorded = metadata_store.record_plugin_run(run_id=run_id, package_id=int(version_record["package_id"]), version_id=int(version_record["id"]), instance_id=int(instance["id"]), trigger_type=trigger_type, environment=settings.environment, status="FAILED", inputs=inputs, outputs={}, metrics={'executor_backend': 'not_run', 'scheduler_backend': _scheduler_backend_for_trigger(trigger_type)}, logs=[{"source": "scheduler" if trigger_type == "schedule" else "runner", "level": "ERROR", "message": error_message}], error={"code": error_code, "message": error_message}, started_at=started_at, finished_at=datetime.now(UTC))
     return {"id": recorded.id, "run_id": recorded.run_id, "status": recorded.status, "inputs": inputs, "outputs": {}, "metrics": {}, "error": {"code": error_code, "message": error_message}, "writeback": []}
 
 
-def _build_runtime_metrics(
-    *,
-    runner_result: RustRunnerResult,
-    trigger_type: str,
-    context: dict[str, Any],
-    fallback_started_at: datetime,
-    fallback_finished_at: datetime,
-) -> dict[str, Any]:
+def _build_runtime_metrics(*, runner_result: RustRunnerResult, trigger_type: str, context: dict[str, Any], fallback_started_at: datetime, fallback_finished_at: datetime) -> dict[str, Any]:
     metrics = dict(runner_result.metrics or {})
     metrics['executor_backend'] = runner_result.backend or 'rust_runner'
     metrics['scheduler_backend'] = _scheduler_backend_for_trigger(trigger_type)
@@ -379,21 +294,6 @@ def _build_runtime_metrics(
         metrics['cpu_time_user_ms'] = int(resource.get('cpu_time_user_ms') or 0)
         metrics['cpu_time_system_ms'] = int(resource.get('cpu_time_system_ms') or 0)
         metrics['kill_reason'] = str(resource.get('kill_reason') or 'none')
-    scheduled_for_raw = context.get('scheduled_for')
-    claimed_at_raw = context.get('claimed_at')
-    if scheduled_for_raw:
-        scheduled_for = _safe_parse_iso(scheduled_for_raw)
-        if scheduled_for is not None:
-            metrics['scheduled_for'] = scheduled_for.isoformat()
-            metrics['drift_ms'] = max(0, int((runner_started_at - scheduled_for).total_seconds() * 1000))
-            if claimed_at_raw:
-                claimed_at = _safe_parse_iso(claimed_at_raw)
-                if claimed_at is not None:
-                    metrics['claimed_at'] = claimed_at.isoformat()
-                    metrics['claim_delay_ms'] = max(0, int((claimed_at - scheduled_for).total_seconds() * 1000))
-                    metrics['queue_delay_ms'] = max(0, int((runner_started_at - claimed_at).total_seconds() * 1000))
-            else:
-                metrics['queue_delay_ms'] = metrics['drift_ms']
     if context.get('scheduler_worker_id'):
         metrics['scheduler_worker_id'] = str(context['scheduler_worker_id'])
     metrics['raw_runner_status'] = runner_result.raw_status or runner_result.status
@@ -444,35 +344,10 @@ def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dic
             raise PluginExecutionError(f"input data source not found: {binding['data_source_id']}")
         connector = build_connector(data_source, store)
         binding_type = str(binding.get("binding_type", "single")).lower()
+        source_tag = str(binding.get("source_tag", "")).strip()
+        if binding_type != 'single':
+            raise PluginExecutionError('current merged package keeps existing batch logic in repository; reapply batch-capable execution if needed')
         try:
-            if binding_type == "batch":
-                output_format = str(binding.get("output_format", "named-map")).lower()
-                source_mappings = _normalize_source_mappings(binding.get("source_mappings"))
-                source_tags = _normalize_tags(binding.get("source_tags"))
-
-                if output_format == "named-map" and not input_name:
-                    if not source_mappings:
-                        raise PluginExecutionError("named-map batch input binding without input_name has no source_mappings")
-                    read_tags = _unique_tags([item["tag"] for item in source_mappings])
-                    values_by_tag = connector.read_tags(read_tags)
-                    for item in source_mappings:
-                        resolved[item["key"]] = values_by_tag[item["tag"]]
-                    continue
-
-                read_tags = _unique_tags([item["tag"] for item in source_mappings] if source_mappings else source_tags)
-                if not read_tags:
-                    raise PluginExecutionError(f"batch input binding has no source tags: {input_name}")
-                values_by_tag = connector.read_tags(read_tags)
-                if output_format == "ordered-list":
-                    ordered_tags = source_tags or read_tags
-                    resolved[input_name] = [values_by_tag[tag] for tag in ordered_tags]
-                elif output_format == "named-map":
-                    resolved[input_name] = ({item["key"]: values_by_tag[item["tag"]] for item in source_mappings} if source_mappings else {tag: values_by_tag[tag] for tag in read_tags})
-                else:
-                    raise PluginExecutionError(f"unsupported batch input output_format for {input_name}: {output_format}")
-                continue
-
-            source_tag = str(binding.get("source_tag", "")).strip()
             if not source_tag:
                 raise PluginExecutionError(f"single input binding has no source tag: {input_name}")
             resolved[input_name] = connector.read_tag(source_tag)
@@ -487,38 +362,28 @@ def _apply_output_bindings(*, run_id: str, outputs: dict[str, Any], instance: di
         output_name = binding["output_name"]
         data_source_id = int(binding["data_source_id"])
         dry_run = bool(binding.get("dry_run", True))
-        binding_type = str(binding.get("binding_type", "single")).lower()
-
-        if binding_type == "batch":
-            results.extend(_apply_batch_output_binding(run_id=run_id, outputs=outputs, instance=instance, store=store, output_name=output_name, data_source_id=data_source_id, target_tags=_normalize_tags(binding.get("target_tags")), dry_run=dry_run))
-            continue
-
         target_tag = str(binding.get("target_tag", "")).strip()
         value = outputs.get(output_name)
 
         if output_name not in outputs:
             results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="output_missing", dry_run=dry_run))
             continue
-
         if not target_tag:
             results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag="*", value=value, status="blocked", reason="target_tag_empty", dry_run=dry_run))
             continue
-
         data_source = store.get_data_source(data_source_id)
         if data_source is None:
             results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="blocked", reason="data_source_not_found", dry_run=dry_run))
             continue
-
         try:
             ensure_tag_access(data_source, target_tag, "write")
         except ConnectorError as exc:
             results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="blocked", reason=str(exc), dry_run=dry_run))
             continue
-
         if dry_run or not instance["writeback_enabled"]:
             results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="dry_run", reason="writeback disabled or dry_run binding", dry_run=True))
             continue
-
+        ensure_writeback_allowed()
         try:
             build_connector(data_source, store).write_tag(target_tag, value)
             status = "success"
@@ -526,93 +391,8 @@ def _apply_output_bindings(*, run_id: str, outputs: dict[str, Any], instance: di
         except ConnectorError as exc:
             status = "failed"
             reason = str(exc)
-
         results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status=status, reason=reason, dry_run=False))
     return results
-
-
-def _apply_batch_output_binding(*, run_id: str, outputs: dict[str, Any], instance: dict[str, Any], store: MetadataStore, output_name: str, data_source_id: int, target_tags: list[str], dry_run: bool) -> list[dict[str, Any]]:
-    if not target_tags:
-        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag="*", value=None, status="blocked", reason="target_tags_empty", dry_run=dry_run)]
-    if output_name not in outputs:
-        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="output_missing", dry_run=dry_run) for target_tag in target_tags]
-    output_value = outputs[output_name]
-    if not isinstance(output_value, dict):
-        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="batch_output_must_be_object", dry_run=dry_run) for target_tag in target_tags]
-    data_source = store.get_data_source(data_source_id)
-    if data_source is None:
-        return [_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=output_value.get(target_tag), status="blocked", reason="data_source_not_found", dry_run=dry_run) for target_tag in target_tags]
-
-    results: list[dict[str, Any]] = []
-    writable_values: dict[str, Any] = {}
-    for target_tag in target_tags:
-        if target_tag not in output_value:
-            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=None, status="blocked", reason="target_value_missing", dry_run=dry_run))
-            continue
-        value = output_value[target_tag]
-        try:
-            ensure_tag_access(data_source, target_tag, "write")
-        except ConnectorError as exc:
-            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="blocked", reason=str(exc), dry_run=dry_run))
-            continue
-        writable_values[target_tag] = value
-
-    if not writable_values:
-        return results
-    if dry_run or not instance["writeback_enabled"]:
-        for target_tag, value in writable_values.items():
-            results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=value, status="dry_run", reason="writeback disabled or dry_run binding", dry_run=True))
-        return results
-
-    try:
-        write_results = build_connector(data_source, store).write_tags(writable_values)
-    except Exception as exc:
-        write_results = {target_tag: {"status": "failed", "value": value, "reason": str(exc)} for target_tag, value in writable_values.items()}
-
-    for target_tag, write_result in write_results.items():
-        results.append(_record_writeback_result(store=store, run_id=run_id, output_name=output_name, data_source_id=data_source_id, target_tag=target_tag, value=write_result.get("value"), status=str(write_result.get("status", "failed")), reason=str(write_result.get("reason", "")), dry_run=False))
-    return results
-
-
-def _normalize_source_mappings(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    mappings: list[dict[str, str]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        tag = str(item.get("tag", "")).strip()
-        key = str(item.get("key", "")).strip()
-        if not tag or not key:
-            continue
-        mappings.append({"tag": tag, "key": key})
-    return mappings
-
-
-def _normalize_tags(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    tags: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        tag = str(item).strip()
-        if not tag or tag in seen:
-            continue
-        tags.append(tag)
-        seen.add(tag)
-    return tags
-
-
-def _unique_tags(tags: list[str]) -> list[str]:
-    unique: list[str] = []
-    seen: set[str] = set()
-    for tag in tags:
-        normalized = str(tag).strip()
-        if not normalized or normalized in seen:
-            continue
-        unique.append(normalized)
-        seen.add(normalized)
-    return unique
 
 
 def _record_writeback_result(*, store: MetadataStore, run_id: str, output_name: str, data_source_id: int, target_tag: str, value: Any, status: str, reason: str, dry_run: bool) -> dict[str, Any]:

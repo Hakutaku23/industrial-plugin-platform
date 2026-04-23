@@ -76,6 +76,12 @@ class RedisExecutionLockManager:
         except Exception as exc:  # noqa: BLE001
             raise LockManagerError(f"failed to release Redis execution lock: {exc}") from exc
 
+    def force_release(self, instance_id: int) -> bool:
+        try:
+            return bool(self.redis.delete(self._key(instance_id)))
+        except Exception as exc:  # noqa: BLE001
+            raise LockManagerError(f"failed to force release Redis execution lock: {exc}") from exc
+
     def is_locked(self, instance_id: int) -> bool:
         try:
             return bool(self.redis.exists(self._key(instance_id)))

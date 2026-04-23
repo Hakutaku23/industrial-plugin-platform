@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from platform_api.api.routes import router
 from platform_api.core.config import settings
 from platform_api.middleware import configure_middlewares
+from platform_api.services.license_manager import license_manager
 from platform_api.services.scheduler import scheduler
 from platform_api.security import make_password_hash
 from platform_api.services.security_store import SecurityStore
@@ -14,6 +15,7 @@ from platform_api.ui import mount_spa
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    license_manager.initialize()
     if settings.security.enabled and settings.security.bootstrap_admin_username and settings.security.bootstrap_admin_password:
         SecurityStore(settings.metadata_database).ensure_bootstrap_admin(
             username=settings.security.bootstrap_admin_username,

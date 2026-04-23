@@ -2,17 +2,17 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description='Generate Ed25519 key pair for offline license issuing')
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Generate issuer Ed25519 key pair for IPP licenses')
+    parser.add_argument('--key-id', required=True)
     parser.add_argument('--out-dir', required=True)
-    parser.add_argument('--kid', default='ed25519-2026-main')
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir).resolve()
@@ -20,13 +20,29 @@ def main() -> int:
 
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
-    priv = base64.b64encode(private_key.private_bytes_raw()).decode('ascii')
-    pub = base64.b64encode(public_key.public_bytes_raw()).decode('ascii')
 
-    (out_dir / 'issuer_private_key.json').write_text(json.dumps({'kid': args.kid, 'alg': 'Ed25519', 'private_key': priv}, indent=2), encoding='utf-8')
-    (out_dir / 'license_public_keys.json').write_text(json.dumps({'schema_version': 1, 'keys': [{'kid': args.kid, 'alg': 'Ed25519', 'public_key': pub, 'status': 'active'}]}, indent=2), encoding='utf-8')
-    return 0
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode('utf-8')
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode('utf-8')
+
+    private_path = out_dir / f'{args.key_id}.private.pem'
+    public_path = out_dir / f'{args.key_id}.public.pem'
+    registry_path = out_dir / f'{args.key_id}.public-registry.json'
+
+    private_path.write_text(private_pem, encoding='utf-8')
+    public_path.write_text(public_pem, encoding='utf-8')
+    registry_path.write_text(json.dumps({'keys': [{'key_id': args.key_id, 'public_key_pem': public_pem}]}, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    print(f'private key  : {private_path}')
+    print(f'public key   : {public_path}')
+    print(f'registry json: {registry_path}')
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    main()

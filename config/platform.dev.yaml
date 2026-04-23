@@ -1,12 +1,27 @@
 app:
   environment: dev
 
+storage:
+  package_storage_dir: var/packages
+  run_storage_dir: var/runs
+
+metadata:
+  backend: mysql
+  sqlite_path: var/platform.sqlite3
+  db_url: "mysql+pymysql://platform:PSELAB%212025.@127.0.0.1:3306/industrial_plugin_platform?charset=utf8mb4"
+
 scheduler:
   enabled: true
   mode: rust-daemon
-  daemon_binary_path: /workspace/bin/ipp_scheduler_core
-  internal_base_url: http://127.0.0.1:8000
-  internal_token: dev-scheduler-token
+  poll_interval_sec: 1.0
+  max_workers: 4
+  lock_ttl_sec: 300
+  redis_url: "redis://127.0.0.1:6379/0"
+  lock_key_prefix: "lock:instance"
+  daemon_binary_path: bin/ipp_scheduler_core
+  internal_base_url: "http://127.0.0.1:8000"
+  internal_token: "dev-scheduler-token"
+  internal_request_timeout_sec: 10.0
   daemon_tick_interval_ms: 200
   daemon_idle_min_interval_ms: 1000
   daemon_idle_max_interval_ms: 5000
@@ -16,7 +31,10 @@ scheduler:
   recovery_interval_sec: 15
 
 runner:
-  binary_path: /workspace/bin/ipp_runner_core
+  default_timeout_sec: 30
+  max_timeout_sec: 300
+  work_root: var/runs
+  binary_path: bin/ipp_runner_core
   python_executable: python
   cleanup_enabled: true
   cleanup_min_keep_runs: 20
@@ -24,3 +42,42 @@ runner:
   cleanup_max_age_sec: 604800
   cleanup_stale_incomplete_age_sec: 86400
   cleanup_sweep_interval_sec: 600
+
+logging:
+  level: INFO
+
+connectors:
+  redis:
+    default_host: 127.0.0.1
+    default_port: 6379
+    default_db: 0
+    default_connect_timeout_sec: 2.0
+    default_socket_timeout_sec: 2.0
+  retry:
+    max_attempts: 3
+    base_delay_sec: 1.0
+    max_delay_sec: 8.0
+
+security:
+  enabled: true
+  session_cookie_name: ipp_session
+  session_cookie_secure: false
+  session_cookie_samesite: lax
+  session_ttl_sec: 43200
+  bootstrap_admin_username: admin
+  bootstrap_admin_password: "admin123456"
+  bootstrap_admin_display_name: Local Administrator
+  bootstrap_admin_email: null
+
+license:
+  enabled: true
+  storage_dir: var/license
+  license_file_name: license.lic
+  public_keys_file: config/license_public_keys.json
+  cache_ttl_sec: 5
+  machine_id_paths:
+    - /host/etc/machine-id
+    - /etc/machine-id
+  hostname_paths:
+    - /host/etc/hostname
+    - /etc/hostname

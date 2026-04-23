@@ -6,7 +6,9 @@
     "dev": "npm --prefix frontend run dev",
     "dev:web": "npm --prefix frontend run dev",
     "dev:api": "powershell -ExecutionPolicy Bypass -File ./scripts/dev-api.ps1",
-    "build": "npm --prefix frontend run build",
+    "build": "node scripts/build-frontend.mjs",
+    "build:web": "node scripts/build-frontend.mjs",
+    "clean:web-generated": "node scripts/build-frontend.mjs --clean-only",
     "typecheck": "npm --prefix frontend run typecheck",
     "test:api": "powershell -ExecutionPolicy Bypass -File ./scripts/run-tests.ps1"
   }

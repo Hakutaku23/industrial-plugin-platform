@@ -26,3 +26,6 @@ crates/target/
 crates/Cargo.lock
 CHANGED_FILES.md
 USAGE.md
+issuer_keys/
+license-fingerprint.*
+license.*

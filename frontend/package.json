@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build",
+    "build": "node ../scripts/build-frontend.mjs",
+    "build:raw": "vue-tsc && vite build",
+    "clean:generated": "node ../scripts/build-frontend.mjs --clean-only",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview"
   },

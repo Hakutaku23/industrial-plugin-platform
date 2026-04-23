@@ -16,6 +16,7 @@ from platform_api.services.execution_lock import (
     InstanceExecutionLease,
     RedisExecutionLockManager,
 )
+from platform_api.services.license_guard import LicenseGuardError, ensure_schedule_dispatch_allowed
 from platform_api.services.metadata_store import (
     AuditEventModel,
     MetadataStore,
@@ -34,11 +35,27 @@ def get_due_snapshot(*, limit: int = 50, worker_id: str | None = None) -> dict[s
     store = MetadataStore(settings.metadata_database)
     now = _db_now()
     recovered_count = _maybe_recover_instances_without_lock(store, now=now)
+    try:
+        ensure_schedule_dispatch_allowed()
+    except LicenseGuardError as exc:
+        note_error(str(exc))
+        idle = max(1000, int(settings.scheduler.daemon_idle_min_interval_ms))
+        note_due_poll(worker_id=worker_id, due_count=0, next_due_in_ms=None, suggested_poll_interval_ms=idle)
+        return {
+            'items': [],
+            'next_due_in_ms': None,
+            'suggested_poll_interval_ms': idle,
+            'recovered_count': recovered_count,
+            'license_blocked': True,
+            'message': str(exc),
+        }
+
     with store.session_factory() as session:
         due_rows = session.scalars(
             select(PluginInstanceModel)
             .where(
                 PluginInstanceModel.schedule_enabled == 1,
+                PluginInstanceModel.status != 'running',
                 or_(
                     PluginInstanceModel.next_scheduled_run_at.is_(None),
                     PluginInstanceModel.next_scheduled_run_at <= now,
@@ -64,6 +81,7 @@ def get_due_snapshot(*, limit: int = 50, worker_id: str | None = None) -> dict[s
             select(PluginInstanceModel)
             .where(
                 PluginInstanceModel.schedule_enabled == 1,
+                PluginInstanceModel.status != 'running',
                 PluginInstanceModel.next_scheduled_run_at.is_not(None),
             )
             .order_by(PluginInstanceModel.next_scheduled_run_at, PluginInstanceModel.id)
@@ -189,7 +207,7 @@ def recover_instances_without_lock(*, force: bool = True) -> int:
     store = MetadataStore(settings.metadata_database)
     now = _db_now()
     if force:
-        return _recover_instances_without_lock(store, now=now)
+        return _recover_instances_without_lock(store, now=now, force_release_locks=True)
     return _maybe_recover_instances_without_lock(store, now=now)
 
 
@@ -198,26 +216,29 @@ def _maybe_recover_instances_without_lock(store: MetadataStore, *, now: datetime
     interval = max(1, int(settings.scheduler.recovery_interval_sec))
     if _LAST_RECOVERY_AT is not None and (now - _LAST_RECOVERY_AT).total_seconds() < interval:
         return 0
-    recovered = _recover_instances_without_lock(store, now=now)
+    recovered = _recover_instances_without_lock(store, now=now, force_release_locks=False)
     _LAST_RECOVERY_AT = now
     return recovered
 
 
-def _recover_instances_without_lock(store: MetadataStore, *, now: datetime) -> int:
+def _recover_instances_without_lock(store: MetadataStore, *, now: datetime, force_release_locks: bool) -> int:
     recovered: list[int] = []
     lock_manager = RedisExecutionLockManager.from_settings()
     with store.session_factory() as session:
-        rows = session.scalars(
-            select(PluginInstanceModel).where(PluginInstanceModel.status == 'running')
-        ).all()
+        rows = session.scalars(select(PluginInstanceModel).where(PluginInstanceModel.status == 'running')).all()
 
         for row in rows:
-            if lock_manager.is_locked(row.id):
+            if force_release_locks:
+                try:
+                    lock_manager.force_release(row.id)
+                except Exception as exc:
+                    note_error(f'force lock release failed: {exc}')
+            elif lock_manager.is_locked(row.id):
                 continue
+
             interval_sec = max(5, int(row.schedule_interval_sec or 30))
             if row.schedule_enabled:
-                if row.next_scheduled_run_at is None:
-                    row.next_scheduled_run_at = _align_to_interval_boundary(now, interval_sec)
+                row.next_scheduled_run_at = _align_to_interval_boundary(now, interval_sec)
                 row.status = 'scheduled'
             else:
                 row.next_scheduled_run_at = None
@@ -233,7 +254,10 @@ def _recover_instances_without_lock(store: MetadataStore, *, now: datetime) -> i
                 event_type='plugin.instance.schedule_recovered',
                 target_type='plugin_instance',
                 target_id=str(instance_id),
-                details={'message': 'Recovered running instance without Redis lock'},
+                details={
+                    'message': 'Recovered orphan running instance during scheduler bootstrap' if force_release_locks else 'Recovered running instance without Redis lock',
+                    'force_release_locks': force_release_locks,
+                },
             )
         except Exception as exc:
             note_error(f'recovery audit failed: {exc}')
@@ -285,19 +309,52 @@ def _finalize_scheduled_instance_run(
         if row is None:
             return
 
+        finished_at = _as_db_time(finished_at)
         row.last_scheduled_run_at = finished_at
         if row.schedule_enabled:
-            if row.next_scheduled_run_at is None:
-                row.next_scheduled_run_at = _align_to_interval_boundary(
-                    finished_at,
-                    max(5, int(row.schedule_interval_sec or 30)),
-                )
+            interval_sec = max(5, int(row.schedule_interval_sec or 30))
+            current_next_due = _as_db_time(row.next_scheduled_run_at) if row.next_scheduled_run_at else None
+            skipped_slots: list[datetime] = []
+            if current_next_due is None:
+                next_due = _align_to_interval_boundary(finished_at, interval_sec)
+            else:
+                next_due = current_next_due
+                while next_due <= finished_at:
+                    skipped_slots.append(next_due)
+                    next_due += timedelta(seconds=interval_sec)
+            row.next_scheduled_run_at = next_due
             row.status = 'scheduled'
         else:
+            skipped_slots = []
             row.next_scheduled_run_at = None
             row.status = 'stopped'
         row.updated_at = finished_at
         session.commit()
+
+    if skipped_slots:
+        try:
+            store.record_audit_event(
+                event_type='plugin.instance.overrun_skipped',
+                target_type='plugin_instance',
+                target_id=str(instance_id),
+                details={
+                    'message': 'Skipped overdue schedule slots because previous run exceeded interval',
+                    'skipped_slots': [item.isoformat() for item in skipped_slots],
+                },
+            )
+        except Exception as exc:
+            note_error(f'overrun skip audit failed: {exc}')
+
+    for skipped_for in skipped_slots:
+        try:
+            _record_skipped_run(
+                store=store,
+                instance_id=instance_id,
+                scheduled_for=skipped_for,
+                reason='Skipped because previous scheduled run exceeded the schedule interval',
+            )
+        except Exception as exc:
+            note_error(f'overrun skipped run record failed: {exc}')
 
 
 def _handle_locked_due_instance(

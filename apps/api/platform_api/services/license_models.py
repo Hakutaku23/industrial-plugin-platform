@@ -1,60 +1,102 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LicenseStatus(StrEnum):
     VALID = 'VALID'
-    VALID_GRACE = 'VALID_GRACE'
+    MISSING = 'MISSING'
+    INVALID_FORMAT = 'INVALID_FORMAT'
     INVALID_SIGNATURE = 'INVALID_SIGNATURE'
-    INVALID_SCHEMA = 'INVALID_SCHEMA'
-    INVALID_PRODUCT = 'INVALID_PRODUCT'
-    INVALID_VERSION_RANGE = 'INVALID_VERSION_RANGE'
-    INVALID_SUBJECT = 'INVALID_SUBJECT'
+    UNKNOWN_ISSUER = 'UNKNOWN_ISSUER'
+    FINGERPRINT_MISMATCH = 'FINGERPRINT_MISMATCH'
     NOT_YET_VALID = 'NOT_YET_VALID'
     EXPIRED = 'EXPIRED'
-    TIME_ROLLBACK_SUSPECTED = 'TIME_ROLLBACK_SUSPECTED'
-    LICENSE_NOT_FOUND = 'LICENSE_NOT_FOUND'
-    INTERNAL_ERROR = 'INTERNAL_ERROR'
+    ROLLBACK_SUSPECTED = 'ROLLBACK_SUSPECTED'
+    IO_ERROR = 'IO_ERROR'
+    CONFIG_ERROR = 'CONFIG_ERROR'
 
 
-class LicenseEnvelope(BaseModel):
-    schema_version: int = 1
+class LicenseGrantModel(BaseModel):
+    mode: str = 'perpetual'
+    not_before: str | None = None
+    not_after: str | None = None
+    allow_manual_run: bool = True
+    allow_schedule: bool = True
+    allow_real_writeback: bool = True
+    max_instances: int | None = None
+    max_packages: int | None = None
+    max_data_sources: int | None = None
+    max_concurrent_runs: int | None = None
+
+
+class LicensePayloadModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    license_schema: str = Field(default='ipp-license/v1', alias='schema')
     license_id: str
-    alg: str
-    kid: str
-    payload: dict[str, Any]
+    issuer: str
+    customer_name: str
+    issued_at: str
+    deployment_fingerprint: str
+    grant: LicenseGrantModel
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LicenseEnvelopeModel(BaseModel):
+    payload: LicensePayloadModel
+    key_id: str
+    algorithm: str = 'Ed25519'
     signature: str
 
 
-class PublicKeyItem(BaseModel):
-    kid: str
-    alg: str
-    public_key: str
-    status: str = 'active'
-
-
-class PublicKeySet(BaseModel):
-    schema_version: int = 1
-    keys: list[PublicKeyItem] = Field(default_factory=list)
-
-
-class TimeRollbackEvent(BaseModel):
-    detected_at: str
-    wallclock_now: str
-    max_seen_wallclock: str
-    delta_sec: int
+class FingerprintRecord(BaseModel):
+    installation_id: str
+    machine_id: str | None = None
+    hostname: str | None = None
+    fingerprint: str
+    generated_at: str
 
 
 class LicenseStateRecord(BaseModel):
-    schema_version: int = 1
+    last_validated_at: str | None = None
+    last_seen_time_utc: str | None = None
+    last_status: str | None = None
+    last_license_id: str | None = None
+    last_fingerprint: str | None = None
+
+
+class LicenseSnapshot(BaseModel):
+    status: LicenseStatus
+    valid: bool
+    readonly_mode: bool
+    message: str
+    license_file_path: str | None = None
+    public_keys_file_path: str | None = None
+    fingerprint: str | None = None
+    installation_id: str | None = None
+    issuer: str | None = None
+    key_id: str | None = None
     license_id: str | None = None
-    last_status: str = LicenseStatus.LICENSE_NOT_FOUND
-    last_verified_at: str | None = None
-    max_seen_wallclock: str | None = None
-    last_deployment_fingerprint: str | None = None
-    last_payload_hash: str | None = None
-    time_rollback_events: list[TimeRollbackEvent] = Field(default_factory=list)
+    customer_name: str | None = None
+    grant_mode: str | None = None
+    issued_at: str | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+    entitlements: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_perpetual(self) -> bool:
+        return (self.grant_mode or '').lower() == 'perpetual'
+
+    @property
+    def is_term(self) -> bool:
+        return (self.grant_mode or '').lower() == 'term'
+
+
+def utcnow_iso() -> str:
+    return datetime.now(UTC).isoformat()

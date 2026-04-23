@@ -76,6 +76,9 @@ const form = ref({
   writeback_enabled: false,
   schedule_enabled: false,
   schedule_interval_sec: 30,
+  schedule_hours: 0,
+  schedule_minutes: 0,
+  schedule_seconds: 30,
   configText: '{}',
 })
 const inputBindings = ref<InputBindingRow[]>([])
@@ -100,6 +103,11 @@ const activeOutputBinding = computed(() => {
 
 const isInputPointModalVisible = computed(() => activeInputBinding.value !== null)
 const isOutputPointModalVisible = computed(() => activeOutputBinding.value !== null)
+const hourOptions = Array.from({ length: 25 }, (_, index) => index)
+const minuteOptions = Array.from({ length: 60 }, (_, index) => index)
+const secondOptions = Array.from({ length: 60 }, (_, index) => index)
+const availableMinuteOptions = computed(() => form.value.schedule_hours >= 24 ? [0] : minuteOptions)
+const availableSecondOptions = computed(() => form.value.schedule_hours >= 24 ? [0] : secondOptions)
 const anyModalVisible = computed(() => (
   isInstanceModalVisible.value
   || isInputBindingsModalVisible.value
@@ -107,6 +115,16 @@ const anyModalVisible = computed(() => (
   || isInputPointModalVisible.value
   || isOutputPointModalVisible.value
 ))
+
+watch(
+  () => form.value.schedule_hours,
+  (hours) => {
+    if (hours >= 24) {
+      form.value.schedule_minutes = 0
+      form.value.schedule_seconds = 0
+    }
+  },
+)
 
 function showCreateForm() {
   resetForm()
@@ -642,7 +660,7 @@ async function submit() {
       config: JSON.parse(form.value.configText),
       writeback_enabled: form.value.writeback_enabled,
       schedule_enabled: form.value.schedule_enabled,
-      schedule_interval_sec: Number(form.value.schedule_interval_sec) || 30,
+      schedule_interval_sec: schedulePartsToSeconds(),
     })
     await loadAll()
     cancelForm()
@@ -721,6 +739,7 @@ async function editInstance(instance: PluginInstanceRecord) {
     writeback_enabled: instance.writeback_enabled,
     schedule_enabled: instance.schedule_enabled,
     schedule_interval_sec: instance.schedule_interval_sec || 30,
+    ...splitScheduleInterval(instance.schedule_interval_sec || 30),
     configText: JSON.stringify(instance.config ?? {}, null, 2),
   }
   await loadPluginVersions(instance.package_name)
@@ -772,7 +791,49 @@ function normalizeOutputFormat(value: unknown): BatchOutputFormat {
   return value === 'ordered-list' ? 'ordered-list' : 'named-map'
 }
 
+function normalizeSchedulePart(value: unknown, min: number, max: number): number {
+  const numberValue = Math.floor(Number(value))
+  if (!Number.isFinite(numberValue)) return min
+  return Math.min(max, Math.max(min, numberValue))
+}
+
+function splitScheduleInterval(totalSeconds: number) {
+  const normalized = Math.min(86400, Math.max(5, Math.floor(Number(totalSeconds) || 30)))
+  return {
+    schedule_hours: Math.floor(normalized / 3600),
+    schedule_minutes: Math.floor((normalized % 3600) / 60),
+    schedule_seconds: normalized % 60,
+  }
+}
+
+function schedulePartsToSeconds(): number {
+  const hours = normalizeSchedulePart(form.value.schedule_hours, 0, 24)
+  const minutes = hours >= 24 ? 0 : normalizeSchedulePart(form.value.schedule_minutes, 0, 59)
+  const seconds = hours >= 24 ? 0 : normalizeSchedulePart(form.value.schedule_seconds, 0, 59)
+  const total = hours * 3600 + minutes * 60 + seconds
+  if (total < 5) throw new Error('定时间隔不能小于 5 秒')
+  if (total > 86400) throw new Error('定时间隔不能超过 24 小时')
+  form.value.schedule_interval_sec = total
+  form.value.schedule_hours = hours
+  form.value.schedule_minutes = minutes
+  form.value.schedule_seconds = seconds
+  return total
+}
+
+function formatScheduleInterval(totalSeconds: number): string {
+  const normalized = Math.min(86400, Math.max(0, Math.floor(Number(totalSeconds) || 0)))
+  const hours = Math.floor(normalized / 3600)
+  const minutes = Math.floor((normalized % 3600) / 60)
+  const seconds = normalized % 60
+  const parts: string[] = []
+  if (hours > 0) parts.push(`${hours} 小时`)
+  if (minutes > 0) parts.push(`${minutes} 分钟`)
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds} 秒`)
+  return parts.join(' ')
+}
+
 function resetForm() {
+  const defaultSchedule = splitScheduleInterval(30)
   editingInstanceId.value = null
   form.value = {
     name: 'demo-instance',
@@ -781,6 +842,7 @@ function resetForm() {
     writeback_enabled: false,
     schedule_enabled: false,
     schedule_interval_sec: 30,
+    ...defaultSchedule,
     configText: '{}',
   }
   inputBindings.value = []
@@ -1030,7 +1092,7 @@ onUnmounted(() => {
           <div class="info-row">
             <span class="info-label">定时规则:</span>
             <span class="info-value">
-              {{ instance.schedule_enabled ? `⏱ 每 ${instance.schedule_interval_sec} 秒` : '⏸ 未启用定时' }}
+              {{ instance.schedule_enabled ? `⏱ 每 ${formatScheduleInterval(instance.schedule_interval_sec)}` : '⏸ 未启用定时' }}
             </span>
           </div>
 
@@ -1120,10 +1182,30 @@ onUnmounted(() => {
                   </option>
                 </select>
               </label>
-              <label>
-                <span>定时间隔（秒）</span>
-                <input v-model.number="form.schedule_interval_sec" type="number" min="5" step="1" required />
-              </label>
+              <div class="schedule-picker">
+                <span class="schedule-picker-title">定时间隔</span>
+                <div class="schedule-select-row">
+                  <label>
+                    <select v-model.number="form.schedule_hours">
+                      <option v-for="hour in hourOptions" :key="hour" :value="hour">{{ hour }}</option>
+                    </select>
+                    <span>小时</span>
+                  </label>
+                  <label>
+                    <select v-model.number="form.schedule_minutes">
+                      <option v-for="minute in availableMinuteOptions" :key="minute" :value="minute">{{ minute }}</option>
+                    </select>
+                    <span>分钟</span>
+                  </label>
+                  <label>
+                    <select v-model.number="form.schedule_seconds">
+                      <option v-for="second in availableSecondOptions" :key="second" :value="second">{{ second }}</option>
+                    </select>
+                    <span>秒</span>
+                  </label>
+                </div>
+                <p class="small-note schedule-note">保存时自动转换为秒，范围为 5 秒到 24 小时。</p>
+              </div>
               <label class="checkbox-box">
                 <input v-model="form.schedule_enabled" type="checkbox" />
                 <span>启用定时运行</span>
@@ -1621,6 +1703,12 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: monospace; }
 .form-panel { margin-bottom: 24px; border: 1px solid #edf2f0; padding: 20px; border-radius: 8px; background: #fbfdfc; }
 .panel-title { margin: 0 0 16px 0; font-size: 16px; color: #2f403d; font-weight: 700; }
 .instance-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.schedule-picker { display: grid; gap: 8px; color: #2f403d; font-weight: 600; font-size: 14px; }
+.schedule-picker-title { display: block; }
+.schedule-select-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.schedule-select-row label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.schedule-select-row select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #bacac5; border-radius: 6px; background: #fff; box-sizing: border-box; }
+.schedule-note { margin: 0; }
 .checkbox-box { display: flex; align-items: center; padding: 10px 16px; border: 1px solid #bacac5; border-radius: 6px; background: #fff; cursor: pointer; font-weight: 600; color: #2f403d; gap: 10px; transition: border 0.2s; }
 .checkbox-box:hover { border-color: #2f403d; }
 .checkbox-box input { width: 16px; height: 16px; margin: 0; }
