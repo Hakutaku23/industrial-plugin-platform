@@ -73,12 +73,19 @@ class InstanceScheduler:
     def status_snapshot(self) -> dict[str, Any]:
         process = self._process
         alive = bool(process and process.poll() is None)
+        exit_code = None if alive or process is None else process.poll()
+        started_age_sec = None
+        if self._started_at is not None:
+            started_age_sec = max(0, int((datetime.now(UTC) - self._started_at).total_seconds()))
         payload = {
             'mode': 'rust-daemon',
             'thread_alive': alive,
             'daemon_pid': process.pid if alive and process else None,
+            'daemon_exit_code': exit_code,
+            'daemon_binary_path': str(self._resolve_binary()) if settings.scheduler.enabled else None,
             'worker_id': self._worker_id,
             'started_at': self._started_at.isoformat() if self._started_at else None,
+            'started_age_sec': started_age_sec,
             'last_error': self._last_error,
             'daemon_tick_interval_ms': settings.scheduler.daemon_tick_interval_ms,
             'daemon_idle_min_interval_ms': settings.scheduler.daemon_idle_min_interval_ms,

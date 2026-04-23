@@ -23,13 +23,13 @@ python scripts/license_keygen.py --key-id issuer-main-2026 --out-dir issuer_keys
 ## 3. 签发永久授权
 
 ```bash
-python scripts/license_issue.py --key-id issuer-main-2026 --private-key issuer_keys/issuer-main-2026.private.pem --customer-name "广西深投环保科技有限公司" --fingerprint-json ./license-fingerprint.json --output ./license.lic --grant-mode perpetual --allow-manual-run true --allow-schedule true --allow-real-writeback true --max-instances 200 --max-packages 200 --max-data-sources 200 --max-concurrent-runs 8 --issuer "Industrial Plugin Platform Issuer"
+python scripts/license_issue.py --key-id issuer-main-2026 --private-key issuer_keys/issuer-main-2026.private.pem --customer-name "某某厂区" --fingerprint-json ./license-fingerprint.json --output ./license.lic --grant-mode perpetual --allow-manual-run true --allow-schedule true --allow-real-writeback true --max-instances 200 --max-packages 200 --max-data-sources 200 --max-concurrent-runs 8 --issuer "Industrial Plugin Platform Issuer"
 ```
 
 ## 4. 签发期限授权
 
 ```bash
-python scripts/license_issue.py --key-id issuer-main-2026 --private-key issuer_keys/issuer-main-2026.private.pem --customer-name "某某厂区" --fingerprint-json ./license-fingerprint.json --output ./license.lic --grant-mode term --not-before 2026-04-23T00:00:00+00:00 --not-after 2027-04-23T00:00:00+00:00 --allow-manual-run true --allow-schedule true --allow-real-writeback true --max-instances 50 --max-packages 50 --max-data-sources 50 --max-concurrent-runs 4 --issuer "Industrial Plugin Platform Issuer"
+python scripts/license_issue.py --key-id issuer-main-2026 --private-key issuer_keys/issuer-main-2026.private.pem --customer-name "某某厂区" --fingerprint-json ./license-fingerprint.json --output ./license.lic --grant-mode term --not-before 2026-04-23T00:00:00+00:00 --not-after 2026-04-24T00:00:00+00:00 --allow-manual-run true --allow-schedule true --allow-real-writeback true --max-instances 50 --max-packages 50 --max-data-sources 50 --max-concurrent-runs 4 --issuer "Industrial Plugin Platform Issuer"
 ```
 
 ## 5. 解码核验

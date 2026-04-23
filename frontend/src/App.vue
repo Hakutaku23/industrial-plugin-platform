@@ -11,6 +11,7 @@
         <RouterLink v-if="can('datasource.read')" to="/data-sources">数据源</RouterLink>
         <RouterLink v-if="can('instance.read')" to="/instances">实例管理</RouterLink>
         <RouterLink v-if="can('run.read')" to="/runs">运行状态</RouterLink>
+        <RouterLink v-if="can('system.read')" to="/system/observability">系统观测</RouterLink>
         <RouterLink v-if="can('system.read')" to="/license">许可证管理</RouterLink>
         <RouterLink v-if="can('user.read')" to="/admin/users">用户权限</RouterLink>
       </nav>

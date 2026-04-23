@@ -178,8 +178,11 @@ class LicenseManager:
             return snapshot
 
         try:
+            # 验签必须使用 alias 字段名恢复出与签发端完全一致的 payload，
+            # 否则诸如 schema -> license_schema 之类的内部字段映射会改变 canonical JSON，
+            # 导致签名稳定失败。
             verify_payload_signature(
-                envelope.payload.model_dump(mode='json'),
+                envelope.payload.model_dump(mode='json', by_alias=True, exclude_none=False),
                 envelope.signature,
                 public_key_pem,
             )
