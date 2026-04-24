@@ -29,3 +29,6 @@ USAGE.md
 issuer_keys/
 license-fingerprint.*
 license.*
+scripts/
+docs/*
+!docs/README.md

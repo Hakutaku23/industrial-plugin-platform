@@ -6,15 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from platform_api.core.config import settings
-from platform_api.services.runtime_errors import (
-    RustRunnerBinaryNotFound,
-    RustRunnerBridgeError,
-)
-from platform_api.services.runtime_protocol import (
-    ExecuteTaskRequestModel,
-    ExecuteTaskResultModel,
-    RustRunnerResult,
-)
+from platform_api.services.runtime_errors import RustRunnerBinaryNotFound, RustRunnerBridgeError
+from platform_api.services.runtime_protocol import ExecuteTaskRequestModel, ExecuteTaskResultModel, RustRunnerResult
 
 
 class RustRunnerBridge:
@@ -40,7 +33,7 @@ class RustRunnerBridge:
     ) -> RustRunnerResult:
         task_work_dir = settings.run_storage_dir / run_id
         request = ExecuteTaskRequestModel(
-            schema_version='runner-task/v1',
+            schema_version='runner-task/v2',
             task_id=task_id,
             run_id=run_id,
             trigger_type=trigger_type,
@@ -60,8 +53,8 @@ class RustRunnerBridge:
                 'working_dir': working_dir or '.',
                 'env': runtime_env,
                 'filesystem_mode': capabilities.get('filesystem', 'scoped'),
-                'network_enabled': bool(capabilities.get('network', False)),
-                'subprocess_enabled': bool(capabilities.get('subprocess', False)),
+                'network_enabled': bool(capabilities.get('network', settings.runner.allow_network_default)),
+                'subprocess_enabled': bool(capabilities.get('subprocess', settings.runner.allow_subprocess_default)),
             },
             sandbox={
                 'work_root': str(settings.run_storage_dir),
@@ -75,6 +68,10 @@ class RustRunnerBridge:
                 'cleanup_stale_incomplete_age_sec': int(settings.runner.cleanup_stale_incomplete_age_sec),
                 'cleanup_sweep_interval_sec': int(settings.runner.cleanup_sweep_interval_sec),
                 'cleanup_state_file': '.runner-cleanup-state',
+                'max_stdout_bytes': int(settings.runner.max_stdout_bytes),
+                'max_stderr_bytes': int(settings.runner.max_stderr_bytes),
+                'max_output_json_bytes': int(settings.runner.max_output_json_bytes),
+                'max_workdir_total_bytes': int(settings.runner.max_workdir_total_bytes),
             },
             payload=payload,
         )
@@ -89,15 +86,11 @@ class RustRunnerBridge:
         )
         raw_stdout = completed.stdout.strip()
         if not raw_stdout:
-            raise RustRunnerBridgeError(
-                f'Rust runner returned empty stdout: {completed.stderr[-1000:]}'
-            )
+            raise RustRunnerBridgeError(f'Rust runner returned empty stdout: {completed.stderr[-1000:]}')
         try:
             parsed = json.loads(raw_stdout)
         except json.JSONDecodeError as exc:
-            raise RustRunnerBridgeError(
-                f'Rust runner stdout is not valid JSON: {raw_stdout[-1000:]}'
-            ) from exc
+            raise RustRunnerBridgeError(f'Rust runner stdout is not valid JSON: {raw_stdout[-1000:]}') from exc
         result = ExecuteTaskResultModel(
             raw=parsed,
             status=str(parsed.get('status', 'infra_error')),
@@ -134,7 +127,5 @@ class RustRunnerBridge:
         else:
             candidate = (settings.project_root / 'target/release/ipp_runner_core').resolve()
         if not candidate.exists():
-            raise RustRunnerBinaryNotFound(
-                f'Rust runner binary not found: {candidate}'
-            )
+            raise RustRunnerBinaryNotFound(f'Rust runner binary not found: {candidate}')
         return candidate

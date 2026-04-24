@@ -24,7 +24,7 @@ class DataSourceRequest(BaseModel):
 def create_data_source(request: DataSourceRequest, principal: Principal = Depends(require_permission('datasource.create'))) -> dict[str, object]:
     metadata_store = store()
     try:
-        ensure_data_source_create_allowed(store=metadata_store)
+        ensure_data_source_create_allowed(store=metadata_store, connector_type=request.connector_type)
         result = metadata_store.create_data_source(
             name=request.name,
             connector_type=request.connector_type,

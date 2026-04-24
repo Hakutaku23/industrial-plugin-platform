@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -42,6 +43,10 @@ class LicenseManager:
     @property
     def public_keys_file_path(self) -> Path:
         return settings.license.public_keys_file
+
+    @property
+    def revocations_file_path(self) -> Path:
+        return settings.license.revocations_file
 
     def initialize(self) -> None:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +99,7 @@ class LicenseManager:
                 message='System clock rollback suspected',
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
             )
@@ -108,6 +114,7 @@ class LicenseManager:
                 message='License system disabled by configuration',
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
                 grant_mode='perpetual',
@@ -123,6 +130,7 @@ class LicenseManager:
                 message='license.lic not found',
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
             )
@@ -139,6 +147,7 @@ class LicenseManager:
                 message=f'Public key registry load failed: {exc}',
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
             )
@@ -155,6 +164,7 @@ class LicenseManager:
                 message=str(exc),
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
             )
@@ -170,6 +180,7 @@ class LicenseManager:
                 message=f'Unknown issuer key: {envelope.key_id}',
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
                 key_id=envelope.key_id,
@@ -178,9 +189,6 @@ class LicenseManager:
             return snapshot
 
         try:
-            # 验签必须使用 alias 字段名恢复出与签发端完全一致的 payload，
-            # 否则诸如 schema -> license_schema 之类的内部字段映射会改变 canonical JSON，
-            # 导致签名稳定失败。
             verify_payload_signature(
                 envelope.payload.model_dump(mode='json', by_alias=True, exclude_none=False),
                 envelope.signature,
@@ -194,6 +202,7 @@ class LicenseManager:
                 message=str(exc),
                 license_file_path=str(self.license_file_path),
                 public_keys_file_path=str(self.public_keys_file_path),
+                revocations_file_path=str(self.revocations_file_path),
                 fingerprint=fingerprint.fingerprint,
                 installation_id=fingerprint.installation_id,
                 key_id=envelope.key_id,
@@ -202,25 +211,45 @@ class LicenseManager:
             return snapshot
 
         payload = envelope.payload
+        entitlements = payload.grant.model_dump(mode='json')
+        common = {
+            'license_file_path': str(self.license_file_path),
+            'public_keys_file_path': str(self.public_keys_file_path),
+            'revocations_file_path': str(self.revocations_file_path),
+            'fingerprint': fingerprint.fingerprint,
+            'installation_id': fingerprint.installation_id,
+            'issuer': payload.issuer,
+            'key_id': envelope.key_id,
+            'license_id': payload.license_id,
+            'customer_name': payload.customer_name,
+            'grant_mode': payload.grant.mode,
+            'issued_at': payload.issued_at,
+            'not_before': payload.grant.not_before,
+            'not_after': payload.grant.not_after,
+            'grace_days': payload.grant.grace_days,
+            'entitlements': entitlements,
+        }
+
         if payload.deployment_fingerprint != fingerprint.fingerprint:
             snapshot = LicenseSnapshot(
                 status=LicenseStatus.FINGERPRINT_MISMATCH,
                 valid=False,
                 readonly_mode=True,
                 message='Deployment fingerprint mismatch',
-                license_file_path=str(self.license_file_path),
-                public_keys_file_path=str(self.public_keys_file_path),
-                fingerprint=fingerprint.fingerprint,
-                installation_id=fingerprint.installation_id,
-                issuer=payload.issuer,
-                key_id=envelope.key_id,
-                license_id=payload.license_id,
-                customer_name=payload.customer_name,
-                grant_mode=payload.grant.mode,
-                issued_at=payload.issued_at,
-                not_before=payload.grant.not_before,
-                not_after=payload.grant.not_after,
-                entitlements=payload.grant.model_dump(),
+                **common,
+            )
+            self._persist_state(snapshot=snapshot, now=now)
+            return snapshot
+
+        revoked_ids = self._load_revoked_license_ids()
+        if payload.license_id in revoked_ids:
+            snapshot = LicenseSnapshot(
+                status=LicenseStatus.REVOKED,
+                valid=False,
+                readonly_mode=True,
+                revoked=True,
+                message='License has been revoked',
+                **common,
             )
             self._persist_state(snapshot=snapshot, now=now)
             return snapshot
@@ -229,6 +258,8 @@ class LicenseManager:
         valid = True
         readonly_mode = False
         message = 'License valid'
+        grace_expires_at = None
+
         not_before = _parse_utc(payload.grant.not_before)
         not_after = _parse_utc(payload.grant.not_after)
 
@@ -238,32 +269,41 @@ class LicenseManager:
             readonly_mode = True
             message = 'License not yet valid'
         elif payload.grant.mode.lower() == 'term' and not_after and now > not_after:
-            status = LicenseStatus.EXPIRED
-            valid = False
-            readonly_mode = True
-            message = 'License expired'
+            grace_days = int(payload.grant.grace_days) if payload.grant.grace_days is not None else int(settings.license.default_grace_days)
+            grace_deadline = not_after + timedelta(days=max(0, grace_days))
+            if grace_days > 0 and now <= grace_deadline:
+                status = LicenseStatus.VALID_GRACE
+                valid = True
+                readonly_mode = True
+                message = 'License expired and is in grace period (read-only)'
+                grace_expires_at = grace_deadline.isoformat()
+            else:
+                status = LicenseStatus.EXPIRED
+                valid = False
+                readonly_mode = True
+                message = 'License expired'
 
         snapshot = LicenseSnapshot(
             status=status,
             valid=valid,
             readonly_mode=readonly_mode,
             message=message,
-            license_file_path=str(self.license_file_path),
-            public_keys_file_path=str(self.public_keys_file_path),
-            fingerprint=fingerprint.fingerprint,
-            installation_id=fingerprint.installation_id,
-            issuer=payload.issuer,
-            key_id=envelope.key_id,
-            license_id=payload.license_id,
-            customer_name=payload.customer_name,
-            grant_mode=payload.grant.mode,
-            issued_at=payload.issued_at,
-            not_before=payload.grant.not_before,
-            not_after=payload.grant.not_after,
-            entitlements=payload.grant.model_dump(),
+            grace_expires_at=grace_expires_at,
+            **common,
         )
         self._persist_state(snapshot=snapshot, now=now)
         return snapshot
+
+    def _load_revoked_license_ids(self) -> set[str]:
+        path = self.revocations_file_path
+        if not path.exists():
+            return set()
+        parsed = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(parsed, dict):
+            items = parsed.get('revoked_license_ids', [])
+            if isinstance(items, list):
+                return {str(item).strip() for item in items if str(item).strip()}
+        raise ValueError(f'revocation registry invalid: {path}')
 
     def _persist_state(self, *, snapshot: LicenseSnapshot, now: datetime) -> None:
         save_state(

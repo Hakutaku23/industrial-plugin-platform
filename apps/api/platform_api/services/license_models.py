@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class LicenseStatus(StrEnum):
     VALID = 'VALID'
+    VALID_GRACE = 'VALID_GRACE'
     MISSING = 'MISSING'
     INVALID_FORMAT = 'INVALID_FORMAT'
     INVALID_SIGNATURE = 'INVALID_SIGNATURE'
@@ -16,6 +17,7 @@ class LicenseStatus(StrEnum):
     FINGERPRINT_MISMATCH = 'FINGERPRINT_MISMATCH'
     NOT_YET_VALID = 'NOT_YET_VALID'
     EXPIRED = 'EXPIRED'
+    REVOKED = 'REVOKED'
     ROLLBACK_SUSPECTED = 'ROLLBACK_SUSPECTED'
     IO_ERROR = 'IO_ERROR'
     CONFIG_ERROR = 'CONFIG_ERROR'
@@ -25,9 +27,12 @@ class LicenseGrantModel(BaseModel):
     mode: str = 'perpetual'
     not_before: str | None = None
     not_after: str | None = None
+    grace_days: int | None = None
     allow_manual_run: bool = True
     allow_schedule: bool = True
     allow_real_writeback: bool = True
+    allow_package_upload: bool = True
+    allowed_connector_types: list[str] = Field(default_factory=list)
     max_instances: int | None = None
     max_packages: int | None = None
     max_data_sources: int | None = None
@@ -77,6 +82,7 @@ class LicenseSnapshot(BaseModel):
     message: str
     license_file_path: str | None = None
     public_keys_file_path: str | None = None
+    revocations_file_path: str | None = None
     fingerprint: str | None = None
     installation_id: str | None = None
     issuer: str | None = None
@@ -87,6 +93,9 @@ class LicenseSnapshot(BaseModel):
     issued_at: str | None = None
     not_before: str | None = None
     not_after: str | None = None
+    grace_days: int | None = None
+    grace_expires_at: str | None = None
+    revoked: bool = False
     entitlements: dict[str, Any] = Field(default_factory=dict)
 
     @property
