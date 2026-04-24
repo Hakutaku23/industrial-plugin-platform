@@ -1320,8 +1320,8 @@ onUnmounted(() => {
   <section class="panel instances-page">
     <div class="intro page-heading">
       <div class="heading-text">
-        <p class="eyebrow">Instances</p>
-        <h2>运行实例管理</h2>
+        <p class="eyebrow">实例管理</p>
+        <h2>实例管理</h2>
         <p class="subtitle">管理工业插件的运行实例。配置位点绑定、执行定时任务或手动触发实例运行。</p>
       </div>
       <div class="header-actions">

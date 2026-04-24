@@ -83,8 +83,8 @@ onMounted(refresh)
   <section class="license-page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">License Management</p>
-        <h1>许可证管理中心</h1>
+        <p class="eyebrow">许可证管理</p>
+        <h1>许可证管理</h1>
         <p class="subtitle">支持多公钥轮换、撤销清单、宽限期展示与 <code>license.lic</code> 上传替换。</p>
       </div>
       <div class="actions">

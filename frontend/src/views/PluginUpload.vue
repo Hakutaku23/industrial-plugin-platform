@@ -58,8 +58,8 @@ async function submit() {
     <!-- 头部介绍 -->
     <div class="intro upload-intro">
       <div class="header-content">
-        <p class="eyebrow">Package Registry</p>
-        <h2 class="page-title">上传插件包</h2>
+        <p class="eyebrow">插件上传</p>
+        <h2 class="page-title">插件上传</h2>
         <p class="page-desc">支持 .zip 与 .tar.gz。包根目录必须包含 manifest.yaml 配置。</p>
       </div>
       <a class="secondary-button template-download" href="/api/v1/templates/python-function-package.zip">

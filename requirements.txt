@@ -10,15 +10,17 @@ cryptography>=43,<46
 redis>=5.0,<7
 PyMySQL>=1.1,<2
 pandas>=2.2,<3
-taospy
+taospy>=2.8,<3
 
-# Plugin authoring / algorithm runtime support
+# Algorithm/runtime extensions required for plant deployment
 numpy>=2.0,<3
 scikit-learn>=1.5,<2
 joblib>=1.4,<2
-torch>=2.5,<3
+torch==2.6.0
+onnx>=1.17,<2
+onnxruntime>=1.20,<2
+skl2onnx>=1.17,<2
 
-# API/testing utilities
+# API support
 python-multipart>=0.0.20,<1
 httpx>=0.27,<1
-pytest>=8.3,<9

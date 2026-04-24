@@ -68,8 +68,8 @@ onMounted(refresh)
   <section class="obs-page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">System Observability</p>
-        <h1>系统观测中心</h1>
+        <p class="eyebrow">系统观测</p>
+        <h1>系统观测</h1>
         <p class="subtitle">集中查看调度器、授权状态、活跃锁与最近定时运行结果，便于工厂试运行前排障与验收。</p>
       </div>
       <button class="primary" @click="refresh" :disabled="loading">{{ loading ? '刷新中…' : '刷新状态' }}</button>

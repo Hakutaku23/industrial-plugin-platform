@@ -476,18 +476,18 @@ onMounted(() => {
     <!-- Header 模块 -->
     <header class="page-header">
       <div class="header-titles">
-        <span class="tag-eyebrow">Connectors</span>
-        <h1 class="page-title">数据源与位点</h1>
+        <span class="tag-eyebrow">数据源管理</span>
+        <h1 class="page-title">数据源管理</h1>
         <p class="page-desc">配置 Mock、Redis 或 TDEngine。查询时间范围及返回内容将在实例运行时动态输入。</p>
       </div>
       <div class="header-actions" v-if="!showForm">
         <button class="btn btn-secondary" @click="loadDataSources" :disabled="loading">
           <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-          <span style="margin-left: 6px">{{ loading ? '刷新中...' : '刷新列表' }}</span>
+          <span class="btn-label">{{ loading ? '刷新中...' : '刷新列表' }}</span>
         </button>
         <button class="btn btn-primary" @click="handleCreate">
           <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-          <span style="margin-left: 6px">新增数据源</span>
+          <span class="btn-label">新增数据源</span>
         </button>
       </div>
     </header>
@@ -563,7 +563,7 @@ onMounted(() => {
             <!-- 位点映射 -->
             <fieldset class="form-section">
               <div class="section-title-row">
-                <legend style="padding:0">点位映射表</legend>
+                <legend class="legend-tight">点位映射表</legend>
                 <button type="button" class="btn btn-sm btn-outline" @click="addPoint">+ 新增位点</button>
               </div>
               
@@ -571,10 +571,10 @@ onMounted(() => {
                 <table class="point-table">
                   <thead>
                     <tr>
-                      <th style="width: 20%">位点类别</th>
-                      <th style="width: 30%">读取配置</th>
-                      <th style="width: 30%">回写配置</th>
-                      <th v-if="form.connector_type === 'mock'" style="width: 15%">Mock 默认值</th>
+                      <th class="col-point-type">位点类别</th>
+                      <th class="col-point-read">读取配置</th>
+                      <th class="col-point-write">回写配置</th>
+                      <th v-if="form.connector_type === 'mock'" class="col-point-mock">Mock 默认值</th>
                       <th class="col-action">操作</th>
                     </tr>
                   </thead>
@@ -641,7 +641,7 @@ onMounted(() => {
           </svg>
           <h3>暂无数据源记录</h3>
           <p>您还没有配置任何数据源，请点击上方按钮立即创建。</p>
-          <button class="btn btn-primary" @click="handleCreate" style="margin-top: 12px">新建数据源</button>
+          <button class="btn btn-primary empty-action" @click="handleCreate">新建数据源</button>
         </div>
 
         <div class="card-grid" v-else>
@@ -696,18 +696,18 @@ onMounted(() => {
 <style scoped>
 /* =========== 设计系统变量 =========== */
 .humanized-container {
-  --c-primary: #3b82f6;
-  --c-primary-hover: #2563eb;
-  --c-danger: #ef4444;
-  --c-danger-hover: #dc2626;
-  --c-text: #1e293b;
-  --c-text-light: #64748b;
-  --c-border: #e2e8f0;
-  --c-bg: #f8fafc;
+  --c-primary: #12685f;
+  --c-primary-hover: #0f5b53;
+  --c-danger: #b42318;
+  --c-danger-hover: #912018;
+  --c-text: #1f2f2c;
+  --c-text-light: #5e6f6c;
+  --c-border: #d8e3df;
+  --c-bg: #f2f6f5;
   --c-card: #ffffff;
-  --radius: 12px;
-  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  --shadow-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --radius: 10px;
+  --shadow: 0 3px 10px rgba(15, 42, 37, 0.05);
+  --shadow-hover: 0 6px 14px rgba(15, 42, 37, 0.08);
   
   max-width: 1320px;
   margin: 0 auto;
@@ -733,10 +733,10 @@ onMounted(() => {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--c-primary);
+  color: #2f403d;
   margin-bottom: 8px;
 }
-.page-title { margin: 0 0 8px; font-size: 28px; font-weight: 700; color: #0f172a;}
+.page-title { margin: 0 0 8px; font-size: 28px; font-weight: 700; color: var(--c-text);}
 .page-desc { margin: 0; color: var(--c-text-light); font-size: 14px; }
 .header-actions { display: flex; gap: 12px; }
 
@@ -747,12 +747,12 @@ onMounted(() => {
   cursor: pointer; border: 1px solid transparent; transition: all 0.2s;
 }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-primary { background: var(--c-primary); color: white; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+.btn-primary { background: var(--c-primary); color: white; box-shadow: 0 1px 2px rgba(15,42,37,0.08); }
 .btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); }
 .btn-secondary { background: white; border-color: var(--c-border); color: var(--c-text); }
-.btn-secondary:hover:not(:disabled) { background: var(--c-bg); border-color: #cbd5e1; }
-.btn-outline { background: transparent; border-color: var(--c-primary); color: var(--c-primary); }
-.btn-outline:hover { background: #eff6ff; }
+.btn-secondary:hover:not(:disabled) { background: var(--c-bg); border-color: #bacac5; }
+.btn-outline { background: transparent; border-color: #9db8b1; color: var(--c-primary); }
+.btn-outline:hover { background: #edf5f2; }
 .btn-ghost { background: transparent; color: var(--c-text-light); }
 .btn-ghost:hover { background: var(--c-bg); color: var(--c-text); }
 .btn-ghost.danger:hover { color: var(--c-danger); background: #fef2f2; }
@@ -772,50 +772,51 @@ onMounted(() => {
   border-radius: var(--radius); box-shadow: var(--shadow);
   display: flex; flex-direction: column; transition: all 0.2s ease;
 }
-.data-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-hover); border-color: #cbd5e1; }
+.data-card:hover { box-shadow: var(--shadow-hover); border-color: #bacac5; }
 .card-header {
   padding: 20px 20px 16px; border-bottom: 1px solid var(--c-border);
   display: flex; justify-content: space-between; align-items: flex-start;
 }
-.card-title h3 { margin: 0 0 8px; font-size: 18px; color: #0f172a; }
+.card-title h3 { margin: 0 0 8px; font-size: 18px; color: var(--c-text); }
 .badge { font-size: 12px; padding: 4px 8px; border-radius: 4px; font-weight: 600; }
-.badge-mock { background: #f1f5f9; color: #475569; }
-.badge-redis { background: #fee2e2; color: #991b1b; }
-.badge-tdengine { background: #e0f2fe; color: #075985; }
+.badge-mock { background: #edf5f2; color: #2f403d; }
+.badge-redis { background: #fef3f2; color: #912018; }
+.badge-tdengine { background: #ecfdf3; color: #027a48; }
 .card-body { padding: 20px; flex: 1; }
 .feature-tags { display: flex; gap: 8px; margin-bottom: 16px; }
 .tag { font-size: 12px; padding: 4px 8px; border-radius: 4px; font-weight: 500;}
-.tag-success { background: #dcfce7; color: #166534; }
-.tag-disabled { background: #f1f5f9; color: #94a3b8; }
-.point-stats { background: #f8fafc; border-radius: 8px; padding: 12px; margin-bottom: 16px; border: 1px dashed var(--c-border); }
+.tag-success { background: #ecfdf3; color: #027a48; }
+.tag-disabled { background: #eef3f1; color: #5e6f6c; }
+.point-stats { background: #f8fbfa; border-radius: 8px; padding: 12px; margin-bottom: 16px; border: 1px dashed var(--c-border); }
 .stat-text { margin: 0 0 8px; font-size: 13px; color: var(--c-text-light); }
 .point-preview { display: flex; flex-direction: column; gap: 6px; }
-.point-item { display: flex; justify-content: space-between; font-size: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 4px; }
-.p-class { font-weight: 600; color: #334155; }
+.point-item { display: flex; justify-content: space-between; font-size: 12px; border-bottom: 1px dotted #c7d6d1; padding-bottom: 4px; }
+.p-class { font-weight: 600; color: #2f403d; }
 .p-tag { color: var(--c-text-light); font-family: monospace;}
 .point-more { font-size: 12px; color: var(--c-text-light); text-align: center; margin-top: 4px; }
 .config-details { font-size: 13px; margin-top: auto;}
 .config-details summary { cursor: pointer; color: var(--c-text-light); outline: none; transition: color 0.2s;}
 .config-details summary:hover { color: var(--c-primary); }
-.code-block { background: #1e293b; color: #f8fafc; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin-top: 8px; font-family: monospace;}
-.card-footer { padding: 12px 20px; border-top: 1px solid var(--c-border); display: flex; justify-content: flex-end; gap: 8px; background: #f8fafc; border-radius: 0 0 var(--radius) var(--radius); }
+.code-block { background: #1f2f2c; color: #f8fafc; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin-top: 8px; font-family: monospace;}
+.card-footer { padding: 12px 20px; border-top: 1px solid var(--c-border); display: flex; justify-content: flex-end; gap: 8px; background: #f8fbfa; border-radius: 0 0 var(--radius) var(--radius); }
 
 /* =========== 表单与输入框 =========== */
 .form-wrapper { display: flex; justify-content: center; animation: fade-in 0.3s ease; }
 .form-card { background: var(--c-card); border-radius: var(--radius); box-shadow: var(--shadow-hover); width: 100%; max-width: 1000px; border: 1px solid var(--c-border); }
-.form-header { padding: 24px; border-bottom: 1px solid var(--c-border); display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border-radius: var(--radius) var(--radius) 0 0; }
-.form-header h2 { margin: 0; font-size: 20px; color: #0f172a;}
+.form-header { padding: 24px; border-bottom: 1px solid var(--c-border); display: flex; justify-content: space-between; align-items: center; background: #f8fbfa; border-radius: var(--radius) var(--radius) 0 0; }
+.form-header h2 { margin: 0; font-size: 20px; color: var(--c-text);}
 .styled-form { padding: 32px 24px; }
 .form-section { border: 1px solid var(--c-border); border-radius: 8px; padding: 24px; margin-bottom: 24px; }
 .form-section legend { font-weight: 600; padding: 0 8px; color: var(--c-primary); font-size: 15px; }
-.bg-light { background: #f8fafc; }
+.legend-tight { padding: 0; }
+.bg-light { background: #f8fbfa; }
 .input-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 20px; }
-.input-item label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px; color: #334155;}
+.input-item label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px; color: #2f403d;}
 .req { color: var(--c-danger); }
 .v-input { width: 100%; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 14px; transition: border-color 0.2s, box-shadow 0.2s; box-sizing: border-box; }
-.v-input:focus { border-color: var(--c-primary); outline: none; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
-.v-input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
-.custom-checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; color: #334155; }
+.v-input:focus { border-color: var(--c-primary); outline: none; box-shadow: 0 0 0 3px rgba(18, 104, 95, 0.12); }
+.v-input:disabled { background: #eef3f1; color: #5e6f6c; cursor: not-allowed; }
+.custom-checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; color: #2f403d; }
 .custom-checkbox.is-disabled { opacity: 0.6; cursor: not-allowed; }
 .custom-checkbox input { accent-color: var(--c-primary); width: 16px; height: 16px; cursor: pointer;}
 .checkbox-group { display: flex; gap: 32px; padding-top: 8px; }
@@ -824,18 +825,24 @@ onMounted(() => {
 .section-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .table-wrapper { overflow-x: auto; border: 1px solid var(--c-border); border-radius: 8px; }
 .point-table { width: 100%; border-collapse: collapse; text-align: left; }
-.point-table th { background: #f8fafc; padding: 12px 16px; font-size: 13px; font-weight: 600; color: #475569; border-bottom: 1px solid var(--c-border); }
+.point-table th { background: #f8fbfa; padding: 12px 16px; font-size: 13px; font-weight: 600; color: #41524f; border-bottom: 1px solid var(--c-border); }
 .point-table td { padding: 12px 16px; border-bottom: 1px solid var(--c-border); vertical-align: top; }
 .point-table tr:last-child td { border-bottom: none; }
 .io-cell { display: flex; align-items: center; gap: 12px; }
 .v-sm { padding: 8px 10px; font-size: 13px; flex: 1; }
 .col-action { width: 60px; text-align: center; }
+.col-point-type { width: 20%; }
+.col-point-read,
+.col-point-write { width: 30%; }
+.col-point-mock { width: 15%; }
 .empty-row { text-align: center; padding: 32px !important; color: var(--c-text-light); font-size: 14px; background: #fafafa; }
 .form-actions { display: flex; justify-content: flex-end; gap: 16px; margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--c-border); }
 
 /* =========== 杂项提示 =========== */
 .alert-box { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 24px; font-size: 14px; display: flex; align-items: center; }
 .empty-state { text-align: center; padding: 80px 20px; background: white; border-radius: 12px; border: 1px dashed var(--c-border); }
-.empty-state h3 { margin: 16px 0 8px; font-size: 18px; color: #334155;}
+.empty-state h3 { margin: 16px 0 8px; font-size: 18px; color: var(--c-text);}
 .empty-state p { color: var(--c-text-light); margin: 0 0 24px; font-size: 14px; }
+.empty-action { margin-top: 12px; }
+.btn-label { margin-left: 6px; }
 </style>

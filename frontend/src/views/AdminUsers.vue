@@ -165,8 +165,8 @@ onMounted(loadAll)
   <section class="panel admin-users-page">
     <div class="page-heading">
       <div>
-        <p class="eyebrow">Security</p>
-        <h2>用户与角色</h2>
+        <p class="eyebrow">用户权限</p>
+        <h2>用户权限</h2>
         <p>系统当前为单角色模型，每个用户只能拥有一个角色。管理员保护规则仍由后端最终校验。</p>
       </div>
       <div class="heading-actions">

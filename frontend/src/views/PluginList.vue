@@ -130,8 +130,8 @@ onMounted(loadPackages)
     <!-- 头部区域 -->
     <header class="page-header">
       <div class="header-text">
-        <span class="eyebrow">Package Registry</span>
-        <h2 class="page-title">插件包管理</h2>
+        <span class="eyebrow">插件管理</span>
+        <h2 class="page-title">插件管理</h2>
         <p class="page-subtitle">查看已登记的插件包、最新版本和版本记录。</p>
       </div>
       <button class="btn btn-primary" @click="loadPackages" :disabled="loading">
@@ -245,14 +245,14 @@ onMounted(loadPackages)
 <style scoped>
 /* 全局容器变量与基础重置 */
 .plugin-list-container {
-  --primary: #0ea5e9;
-  --primary-hover: #0284c7;
-  --danger: #ef4444;
-  --danger-hover: #dc2626;
-  --border: #e2e8f0;
-  --bg-light: #f8fafc;
-  --text-main: #0f172a;
-  --text-muted: #64748b;
+  --primary: #12685f;
+  --primary-hover: #0f5b53;
+  --danger: #b42318;
+  --danger-hover: #912018;
+  --border: #d8e3df;
+  --bg-light: #f8fbfa;
+  --text-main: #1f2f2c;
+  --text-muted: #5e6f6c;
   max-width: 1080px;
   margin: 0 auto;
   padding: 24px;
@@ -304,10 +304,10 @@ onMounted(loadPackages)
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
-.btn-outline { background: #fff; border-color: #cbd5e1; color: #334155; }
-.btn-outline:hover:not(:disabled) { background: var(--bg-light); border-color: #94a3b8; }
+.btn-outline { background: #fff; border-color: #bacac5; color: #2f403d; }
+.btn-outline:hover:not(:disabled) { background: var(--bg-light); border-color: #9db8b1; color: var(--primary); }
 .btn-danger { background: #fff; border-color: #fca5a5; color: var(--danger); }
-.btn-danger:hover:not(:disabled) { background: #fef2f2; border-color: #f87171; }
+.btn-danger:hover:not(:disabled) { background: #fef3f2; border-color: #fda29b; color: var(--danger-hover); }
 
 .icon, .icon-sm { width: 16px; height: 16px; }
 .spin-icon { width: 16px; height: 16px; animation: spin 1s linear infinite; }
@@ -359,7 +359,7 @@ onMounted(loadPackages)
   transition: border-color 0.2s, box-shadow 0.2s;
   overflow: hidden;
 }
-.package-card:hover { border-color: #cbd5e1; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+.package-card:hover { border-color: #9db8b1; box-shadow: 0 4px 10px rgba(15,42,37,0.08); }
 .package-card.is-expanded { border-color: var(--primary); }
 
 .card-body {
@@ -375,18 +375,18 @@ onMounted(loadPackages)
 .pkg-main { display: flex; align-items: flex-start; gap: 16px; flex: 1; min-width: 300px; }
 .pkg-avatar {
   width: 48px; height: 48px;
-  background: linear-gradient(135deg, #e0f2fe, #bae6fd);
-  color: var(--primary-hover);
+  background: linear-gradient(135deg, #eef8f6, #deeeea);
+  color: var(--primary);
   border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
   font-size: 20px; font-weight: 700; flex-shrink: 0;
 }
 .pkg-title-wrapper { display: flex; align-items: center; gap: 12px; }
 .pkg-display-name { margin: 0; font-size: 18px; font-weight: 600; }
-.badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; background: #e2e8f0; color: #475569; }
-.badge-light { background: #f1f5f9; color: #64748b; }
+.badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; background: #eef3f1; color: #41524f; }
+.badge-light { background: #f3f7f6; color: #5e6f6c; }
 .pkg-name { font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-muted); margin: 4px 0; }
-.pkg-desc { font-size: 14px; color: #475569; margin: 8px 0 0; line-height: 1.5; }
+.pkg-desc { font-size: 14px; color: #41524f; margin: 8px 0 0; line-height: 1.5; }
 
 /* 卡片指标区 */
 .pkg-stats { display: flex; gap: 32px; }
@@ -423,29 +423,29 @@ onMounted(loadPackages)
 
 /* JSON 运行测试区 */
 .ver-runner {
-  border-top: 1px dashed #cbd5e1;
+  border-top: 1px dashed #c7d6d1;
   padding-top: 16px;
 }
-.input-label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 8px; color: #475569; }
+.input-label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 8px; color: #41524f; }
 .json-textarea {
   width: 100%;
   padding: 8px;
   font-family: ui-monospace, monospace;
   font-size: 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #bacac5;
   border-radius: 6px;
   resize: vertical;
   margin-bottom: 12px;
-  background: #f8fafc;
+  background: #f8fbfa;
   box-sizing: border-box;
 }
-.json-textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(14,165,233,0.1); }
+.json-textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(18,104,95,0.12); }
 .run-btn { width: 100%; justify-content: center; }
 
 /* 执行结果反馈 */
-.result-box { margin-top: 12px; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0; }
-.result-header { background: #f1f5f9; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #475569; border-bottom: 1px solid #e2e8f0; }
-.result-code { margin: 0; padding: 12px; background: #1e293b; color: #f8fafc; font-size: 12px; font-family: ui-monospace, monospace; overflow-x: auto; max-height: 200px; }
+.result-box { margin-top: 12px; border-radius: 6px; overflow: hidden; border: 1px solid #d8e3df; }
+.result-header { background: #f3f7f6; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #41524f; border-bottom: 1px solid #d8e3df; }
+.result-code { margin: 0; padding: 12px; background: #1f2f2c; color: #f8fafc; font-size: 12px; font-family: ui-monospace, monospace; overflow-x: auto; max-height: 200px; }
 
 /* 分页 */
 .pagination-bar {
