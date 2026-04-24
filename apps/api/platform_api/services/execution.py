@@ -1,13 +1,12 @@
 import subprocess
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from platform_api.core.config import settings
 from platform_api.services.connectors import ConnectorError, build_connector, ensure_tag_access
 from platform_api.services.execution_lock import (
-    InstanceExecutionLease,
     LockManagerError,
     RedisExecutionLockManager,
 )
@@ -344,16 +343,147 @@ def _resolve_bound_inputs(instance: dict[str, Any], store: MetadataStore) -> dic
             raise PluginExecutionError(f"input data source not found: {binding['data_source_id']}")
         connector = build_connector(data_source, store)
         binding_type = str(binding.get("binding_type", "single")).lower()
-        source_tag = str(binding.get("source_tag", "")).strip()
-        if binding_type != 'single':
-            raise PluginExecutionError('current merged package keeps existing batch logic in repository; reapply batch-capable execution if needed')
+
         try:
-            if not source_tag:
-                raise PluginExecutionError(f"single input binding has no source tag: {input_name}")
-            resolved[input_name] = connector.read_tag(source_tag)
+            if binding_type == "single":
+                source_tag = str(binding.get("source_tag", "")).strip()
+                if not input_name:
+                    raise PluginExecutionError("single input binding has no input_name")
+                if not source_tag:
+                    raise PluginExecutionError(f"single input binding has no source tag: {input_name}")
+                resolved[input_name] = connector.read_tag(source_tag)
+                continue
+
+            if binding_type == "batch":
+                _resolve_batch_input(binding=binding, connector=connector, resolved=resolved)
+                continue
+
+            if binding_type == "history":
+                if not input_name:
+                    raise PluginExecutionError("history input binding has no input_name")
+                source_tags = _normalize_binding_tags(binding.get("source_tags"))
+                if not source_tags:
+                    raise PluginExecutionError(f"history input binding has no source_tags: {input_name}")
+                window = _history_window_config(binding)
+                start_time, end_time = _resolve_history_window(window)
+                query_history = getattr(connector, "query_history", None)
+                if not callable(query_history):
+                    raise PluginExecutionError("selected data source does not support history query")
+                resolved[input_name] = query_history(
+                    source_tags,
+                    start_time=start_time,
+                    end_time=end_time,
+                    sample_interval_sec=window["sample_interval_sec"],
+                    lookback_before_start_sec=window["lookback_before_start_sec"],
+                    fill_method=window["fill_method"],
+                    strict_first_value=window["strict_first_value"],
+                )
+                continue
+
+            raise PluginExecutionError(f"unsupported input binding type: {binding_type}")
         except ConnectorError as exc:
-            raise PluginExecutionError(f"input binding failed for {input_name}: {exc}") from exc
+            raise PluginExecutionError(f"input binding failed for {input_name or binding_type}: {exc}") from exc
     return resolved
+
+
+def _resolve_batch_input(*, binding: dict[str, Any], connector, resolved: dict[str, Any]) -> None:
+    input_name = str(binding.get("input_name", "")).strip()
+    output_format = str(binding.get("output_format", "named-map")).lower()
+    source_mappings = _normalize_source_mappings(binding.get("source_mappings"))
+    source_tags = _normalize_binding_tags(binding.get("source_tags"))
+
+    if output_format == "named-map":
+        if source_mappings:
+            values = connector.read_tags([item["tag"] for item in source_mappings])
+            mapped = {item["key"]: values[item["tag"]] for item in source_mappings}
+        else:
+            if not source_tags:
+                raise PluginExecutionError("batch input binding has no source tags")
+            values = connector.read_tags(source_tags)
+            mapped = {tag: values[tag] for tag in source_tags}
+        if input_name:
+            resolved[input_name] = mapped
+        else:
+            resolved.update(mapped)
+        return
+
+    if output_format == "ordered-list":
+        if not input_name:
+            raise PluginExecutionError("ordered-list batch binding requires input_name")
+        if not source_tags:
+            raise PluginExecutionError(f"ordered-list batch input binding has no source_tags: {input_name}")
+        values = connector.read_tags(source_tags)
+        resolved[input_name] = [values[tag] for tag in source_tags]
+        return
+
+    raise PluginExecutionError(f"unsupported batch output_format: {output_format}")
+
+
+def _history_window_config(binding: dict[str, Any]) -> dict[str, Any]:
+    window = binding.get("window") if isinstance(binding.get("window"), dict) else {}
+    start_offset_min = _positive_int(window.get("start_offset_min", binding.get("start_offset_min", 60)), "start_offset_min", minimum=1)
+    end_offset_min = _positive_int(window.get("end_offset_min", binding.get("end_offset_min", 0)), "end_offset_min", minimum=0)
+    sample_interval_sec = _positive_int(window.get("sample_interval_sec", binding.get("sample_interval_sec", 60)), "sample_interval_sec", minimum=1)
+    lookback_before_start_sec = _positive_int(window.get("lookback_before_start_sec", binding.get("lookback_before_start_sec", 600)), "lookback_before_start_sec", minimum=0)
+    fill_method = str(window.get("fill_method", binding.get("fill_method", "ffill_then_interpolate"))).strip() or "ffill_then_interpolate"
+    strict_first_value = bool(window.get("strict_first_value", binding.get("strict_first_value", True)))
+    if start_offset_min <= end_offset_min:
+        raise PluginExecutionError("history input start_offset_min must be greater than end_offset_min")
+    return {
+        "start_offset_min": start_offset_min,
+        "end_offset_min": end_offset_min,
+        "sample_interval_sec": sample_interval_sec,
+        "lookback_before_start_sec": lookback_before_start_sec,
+        "fill_method": fill_method,
+        "strict_first_value": strict_first_value,
+    }
+
+
+def _resolve_history_window(window: dict[str, Any]) -> tuple[datetime, datetime]:
+    now = datetime.now().replace(microsecond=0)
+    end_time = now - timedelta(minutes=int(window["end_offset_min"]))
+    start_time = now - timedelta(minutes=int(window["start_offset_min"]))
+    if start_time >= end_time:
+        raise PluginExecutionError("history input window is invalid")
+    return start_time, end_time
+
+
+def _positive_int(value: Any, field: str, *, minimum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise PluginExecutionError(f"history input {field} must be an integer") from exc
+    if parsed < minimum:
+        raise PluginExecutionError(f"history input {field} must be >= {minimum}")
+    return parsed
+
+
+def _normalize_binding_tags(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        tag = str(item).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        result.append(tag)
+    return result
+
+
+def _normalize_source_mappings(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get("tag", "")).strip()
+        key = str(item.get("key", "")).strip()
+        if tag and key:
+            result.append({"tag": tag, "key": key})
+    return result
 
 
 def _apply_output_bindings(*, run_id: str, outputs: dict[str, Any], instance: dict[str, Any], store: MetadataStore) -> list[dict[str, Any]]:

@@ -142,7 +142,7 @@ fn main() {
         }
         Err(err) => {
             let fallback = ExecuteTaskResult {
-                schema_version: "runner-result/v1".to_string(),
+                schema_version: "runner-result/v2".to_string(),
                 task_id: "unknown".to_string(),
                 run_id: "unknown".to_string(),
                 status: "infra_error".to_string(),
@@ -358,7 +358,7 @@ fn execute_task() -> Result<ExecuteTaskResult> {
     };
 
     Ok(ExecuteTaskResult {
-        schema_version: "runner-result/v1".to_string(),
+        schema_version: "runner-result/v2".to_string(),
         task_id: request.task_id,
         run_id: request.run_id,
         status: final_status,
@@ -384,7 +384,7 @@ fn execute_task() -> Result<ExecuteTaskResult> {
 }
 
 fn validate_request(request: &ExecuteTaskRequest) -> Result<()> {
-    if request.schema_version != "runner-task/v1" {
+    if request.schema_version != "runner-task/v1" && request.schema_version != "runner-task/v2" {
         anyhow::bail!("unsupported schema version: {}", request.schema_version);
     }
     if request.plugin.entry_mode != "function" {

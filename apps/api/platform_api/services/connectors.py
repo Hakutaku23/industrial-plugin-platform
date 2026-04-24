@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, TypeVar
 
 from platform_api.core.config import settings
@@ -247,7 +248,6 @@ class RedisConnector(Connector):
         normalized_tag = str(tag).strip()
         if not self.prefix:
             return normalized_tag
-
         if self.prefix.endswith(self.separator):
             return f"{self.prefix}{normalized_tag}"
         if normalized_tag.startswith(self.separator):
@@ -265,27 +265,33 @@ class TDengineConnector(Connector):
         self.database = str(config.get("database", "")).strip()
         self.table_name = str(config.get("table_name", config.get("tableName", ""))).strip()
         self.timezone = str(config.get("timezone", "Asia/Shanghai")).strip() or "Asia/Shanghai"
+        self.ts_column = str(config.get("ts_column", config.get("tsColumn", "ts"))).strip() or "ts"
+        self.value_column = str(config.get("value_column", config.get("valueColumn", "point_value"))).strip() or "point_value"
+        self.point_code_column = str(config.get("point_code_column", config.get("pointCodeColumn", "point_code"))).strip() or "point_code"
 
     def read_tag(self, tag: str) -> Any:
-        raise ConnectorError(
-            "tdengine history data source requires instance-level query parameters; use query_history() in a future runtime integration",
-        )
+        raise ConnectorError("tdengine is a historical data source; configure a history input binding instead")
 
     def read_tags(self, tags: list[str]) -> dict[str, Any]:
-        raise ConnectorError(
-            "tdengine history data source requires instance-level query parameters; generic point binding is not enabled yet",
-        )
+        raise ConnectorError("tdengine is a historical data source; configure a history input binding instead")
 
     def write_tag(self, tag: str, value: Any) -> None:
         raise ConnectorError("tdengine data source is read-only")
 
     def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        return {
-            tag: {"status": "failed", "value": value, "reason": "tdengine data source is read-only"}
-            for tag, value in values.items()
-        }
+        return {tag: {"status": "failed", "value": value, "reason": "tdengine data source is read-only"} for tag, value in values.items()}
 
-    def query_history(self, tags: list[str], *, start_time: datetime, end_time: datetime):
+    def query_history(
+        self,
+        tags: list[str],
+        *,
+        start_time: datetime,
+        end_time: datetime,
+        sample_interval_sec: int = 60,
+        lookback_before_start_sec: int = 600,
+        fill_method: str = "ffill_then_interpolate",
+        strict_first_value: bool = True,
+    ) -> dict[str, Any]:
         try:
             import pandas as pd
             import taosrest
@@ -299,11 +305,22 @@ class TDengineConnector(Connector):
             raise ConnectorError("tdengine database is not configured")
         if not self.table_name:
             raise ConnectorError("tdengine table_name is not configured")
-        if start_time > end_time:
+        start_time = _naive_datetime(start_time)
+        end_time = _naive_datetime(end_time)
+        if start_time >= end_time:
             raise ConnectorError("tdengine query start_time must be earlier than end_time")
+
+        sample_interval_sec = max(1, int(sample_interval_sec))
+        lookback_before_start_sec = max(0, int(lookback_before_start_sec))
+        query_start = _naive_datetime(start_time - timedelta(seconds=lookback_before_start_sec))
 
         for tag in normalized_tags:
             ensure_tag_access(self.data_source, tag, "read")
+
+        table_identifier = _sql_identifier(self.table_name)
+        ts_identifier = _sql_identifier(self.ts_column)
+        value_identifier = _sql_identifier(self.value_column)
+        point_code_identifier = _sql_identifier(self.point_code_column)
 
         def _query():
             conn = None
@@ -316,41 +333,56 @@ class TDengineConnector(Connector):
                     timezone=self.timezone,
                 )
                 cursor = conn.cursor()
-                start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+                query_start_str = query_start.strftime("%Y-%m-%d %H:%M:%S")
                 end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
                 if len(normalized_tags) == 1:
-                    tag_sql = f"point_code='{_sql_quote(normalized_tags[0])}'"
+                    tag_sql = f"{point_code_identifier}='{_sql_quote(normalized_tags[0])}'"
                 else:
                     quoted = ", ".join(f"'{_sql_quote(tag)}'" for tag in normalized_tags)
-                    tag_sql = f"point_code IN ({quoted})"
+                    tag_sql = f"{point_code_identifier} IN ({quoted})"
                 sql = (
-                    f"SELECT ts, point_value, point_code FROM {self.table_name} "
-                    f"WHERE {tag_sql} AND ts >= '{start_time_str}' AND ts <= '{end_time_str}'"
+                    f"SELECT {ts_identifier}, {value_identifier}, {point_code_identifier} FROM {table_identifier} "
+                    f"WHERE {tag_sql} AND {ts_identifier} >= '{query_start_str}' AND {ts_identifier} <= '{end_time_str}' "
+                    f"ORDER BY {ts_identifier} ASC"
                 )
                 cursor.execute(sql)
                 rows = cursor.fetchall()
                 if not rows:
-                    return pd.DataFrame(columns=["ts", *normalized_tags])
-                df = pd.DataFrame(rows, columns=["ts", "point_value", "point_code"])
-                wide = (
-                    df.pivot_table(index="ts", columns="point_code", values="point_value", aggfunc="first")
-                    .sort_index()
-                    .reset_index()
+                    raw = pd.DataFrame(columns=["ts", "point_value", "point_code"])
+                else:
+                    raw = pd.DataFrame(rows, columns=["ts", "point_value", "point_code"])
+                return _normalize_history_dataframe(
+                    raw=raw,
+                    tags=normalized_tags,
+                    query_start=query_start,
+                    start_time=start_time,
+                    end_time=end_time,
+                    sample_interval_sec=sample_interval_sec,
+                    fill_method=fill_method,
+                    strict_first_value=strict_first_value,
                 )
-                wide.columns.name = None
-                return wide
             finally:
                 if conn is not None:
                     conn.close()
 
         try:
-            return self._retry(
+            df = self._retry(
                 operation="query_history",
                 target=", ".join(normalized_tags[:5]) + (" ..." if len(normalized_tags) > 5 else ""),
                 func=_query,
             )
         except ConnectorError as exc:
             raise ConnectorError(f"tdengine query failed: {exc}") from exc
+
+        return _dataframe_payload(
+            df=df,
+            tags=normalized_tags,
+            start_time=start_time,
+            end_time=end_time,
+            sample_interval_sec=sample_interval_sec,
+            lookback_before_start_sec=lookback_before_start_sec,
+            fill_method=fill_method,
+        )
 
 
 def build_connector(data_source: dict[str, Any], store) -> Connector:
@@ -451,6 +483,141 @@ def _coerce_scalar(value: str) -> Any:
         return int(value)
     except ValueError:
         return value
+
+
+def _normalize_history_dataframe(
+    *,
+    raw,
+    tags: list[str],
+    query_start: datetime,
+    start_time: datetime,
+    end_time: datetime,
+    sample_interval_sec: int,
+    fill_method: str,
+    strict_first_value: bool,
+):
+    import pandas as pd
+
+    query_start = _naive_datetime(query_start)
+    start_time = _naive_datetime(start_time)
+    end_time = _naive_datetime(end_time)
+    full_index = _naive_datetime_index(
+        pd,
+        pd.date_range(start=query_start, end=end_time, freq=f"{sample_interval_sec}s"),
+    )
+    if raw.empty:
+        aligned = pd.DataFrame(index=full_index, columns=tags)
+    else:
+        raw = raw.copy()
+        raw["ts"] = _naive_timestamp_series(pd, raw["ts"])
+        raw = raw.dropna(subset=["ts", "point_code"])
+        wide = raw.pivot_table(index="ts", columns="point_code", values="point_value", aggfunc="first").sort_index()
+        wide.index = _naive_datetime_index(pd, wide.index)
+        for tag in tags:
+            if tag not in wide.columns:
+                wide[tag] = None
+        wide = wide[tags]
+        merged_index = wide.index.union(full_index).sort_values()
+        aligned = wide.reindex(merged_index)
+        normalized_fill_method = str(fill_method or "ffill_then_interpolate").lower()
+        if normalized_fill_method in {"ffill", "forward_fill", "ffill_then_interpolate"}:
+            aligned = aligned.ffill()
+        if normalized_fill_method in {"interpolate", "time_interpolate", "ffill_then_interpolate"}:
+            aligned = aligned.interpolate(method="time", limit_area="inside")
+        aligned = aligned.reindex(full_index)
+
+    result = aligned.loc[start_time:end_time, tags]
+    if result.empty:
+        raise ConnectorError("tdengine history query returned an empty aligned dataframe")
+
+    missing_first = [tag for tag in tags if tag not in result.columns or pd.isna(result.iloc[0][tag])]
+    if missing_first and strict_first_value:
+        raise ConnectorError(
+            "tdengine history missing initial value for tags: "
+            + ", ".join(missing_first)
+            + "; increase lookback_before_start_sec or disable strict_first_value"
+        )
+    return result
+
+
+def _dataframe_payload(
+    *,
+    df,
+    tags: list[str],
+    start_time: datetime,
+    end_time: datetime,
+    sample_interval_sec: int,
+    lookback_before_start_sec: int,
+    fill_method: str,
+) -> dict[str, Any]:
+    import pandas as pd
+
+    safe = df.where(pd.notna(df), None)
+    return {
+        "__ipp_type": "dataframe",
+        "orient": "split",
+        "index_name": "ts",
+        "index": [idx.strftime("%Y-%m-%d %H:%M:%S") for idx in safe.index],
+        "columns": [str(col) for col in safe.columns],
+        "data": safe.astype(object).values.tolist(),
+        "metadata": {
+            "source": "tdengine",
+            "tags": tags,
+            "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "sample_interval_sec": sample_interval_sec,
+            "lookback_before_start_sec": lookback_before_start_sec,
+            "fill_method": fill_method,
+            "rows": int(len(safe)),
+        },
+    }
+
+
+
+def _naive_datetime(value: datetime) -> datetime:
+    """Return a tz-naive datetime while preserving the displayed local clock time."""
+    if value.tzinfo is None:
+        return value.replace(microsecond=0)
+    return value.replace(tzinfo=None, microsecond=0)
+
+
+def _naive_timestamp_series(pd, values):
+    """Normalize TDengine timestamp values to tz-naive pandas datetimes."""
+    converted = pd.to_datetime(values, errors="coerce")
+    try:
+        if getattr(converted.dt, "tz", None) is not None:
+            return converted.dt.tz_localize(None)
+    except AttributeError:
+        pass
+    return converted.map(_naive_pandas_timestamp)
+
+
+def _naive_datetime_index(pd, index):
+    converted = pd.DatetimeIndex(pd.to_datetime(index, errors="coerce"))
+    if converted.tz is not None:
+        return converted.tz_localize(None)
+    return pd.DatetimeIndex([_naive_pandas_timestamp(item) for item in converted])
+
+
+def _naive_pandas_timestamp(value):
+    if value is None:
+        return value
+    try:
+        if hasattr(value, "tz_localize") and getattr(value, "tzinfo", None) is not None:
+            return value.tz_localize(None)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
+
+def _sql_identifier(value: str) -> str:
+    normalized = str(value).strip()
+    if not normalized:
+        raise ConnectorError("empty TDengine SQL identifier")
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_\.]*$", normalized):
+        raise ConnectorError(f"unsafe TDengine SQL identifier: {normalized}")
+    return normalized
 
 
 def _unique_tags(tags: list[str]) -> list[str]:

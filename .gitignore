@@ -29,6 +29,8 @@ USAGE.md
 issuer_keys/
 license-fingerprint.*
 license.*
-scripts/
+scripts/*
 docs/*
 !docs/README.md
+!scripts/build-frontend.mjs
+tools/

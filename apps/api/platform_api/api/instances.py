@@ -8,11 +8,17 @@ from pydantic import BaseModel, Field
 from platform_api.api.common import store
 from platform_api.security import Principal, require_permission
 from platform_api.services.execution import PluginExecutionError, execute_plugin_instance_locked
+from platform_api.services.instance_validation import (
+    BindingValidationError,
+    validate_instance_binding_data_sources,
+    validate_instance_bindings,
+)
 from platform_api.services.license_guard import (
     LicenseGuardError,
     ensure_instance_create_allowed,
     ensure_schedule_enabled_allowed,
 )
+from platform_api.services.manifest import PluginManifest
 
 router = APIRouter(prefix='/api/v1', tags=['instances'])
 
@@ -34,6 +40,23 @@ class InstanceScheduleRequest(BaseModel):
     interval_sec: int | None = Field(default=None, ge=5, le=86400)
 
 
+def _validate_instance_request(metadata_store, request: PluginInstanceRequest) -> None:
+    version_record = metadata_store.get_plugin_version(request.package_name, request.version)
+    if version_record is None:
+        return
+    manifest = PluginManifest.model_validate(version_record['manifest'])
+    validate_instance_bindings(
+        manifest=manifest,
+        input_bindings=request.input_bindings,
+        output_bindings=request.output_bindings,
+    )
+    validate_instance_binding_data_sources(
+        manifest=manifest,
+        input_bindings=request.input_bindings,
+        data_source_resolver=metadata_store.get_data_source,
+    )
+
+
 @router.post('/instances', status_code=status.HTTP_201_CREATED)
 def upsert_plugin_instance(
     request: PluginInstanceRequest,
@@ -43,8 +66,11 @@ def upsert_plugin_instance(
     try:
         ensure_instance_create_allowed(store=metadata_store)
         ensure_schedule_enabled_allowed(enabled=request.schedule_enabled)
+        _validate_instance_request(metadata_store, request)
     except LicenseGuardError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except BindingValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     result = metadata_store.upsert_plugin_instance(
         name=request.name,
         package_name=request.package_name,
@@ -80,8 +106,11 @@ def update_plugin_instance(
     metadata_store = store()
     try:
         ensure_schedule_enabled_allowed(enabled=request.schedule_enabled)
+        _validate_instance_request(metadata_store, request)
     except LicenseGuardError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except BindingValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     result = metadata_store.update_plugin_instance(
         instance_id=instance_id,
         name=request.name,

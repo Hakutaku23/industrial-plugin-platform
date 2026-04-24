@@ -18,19 +18,40 @@ import {
   type RunPluginResult,
 } from '../api/packages'
 
-type BindingType = 'single' | 'batch'
+type BindingType = 'single' | 'batch' | 'history'
 type BatchOutputFormat = 'named-map' | 'ordered-list'
+type HistoryFillMethod = 'ffill' | 'interpolate' | 'ffill_then_interpolate' | 'none'
 
 interface ManifestInterfaceDef {
   name: string
   type: string
   required: boolean
   description: string
+  schema: Record<string, unknown> | null
+}
+
+interface ManifestInputBindingHint {
+  bindingType?: BindingType
+  connectorType?: 'mock' | 'redis' | 'tdengine'
+  sourceTags: string[]
+  lockConnectorType: boolean
+  lockSourceTags: boolean
+  window?: Partial<HistoryWindowConfig>
+  dataSource?: Record<string, unknown>
 }
 
 interface SourceMappingRow {
   tag: string
   key: string
+}
+
+interface HistoryWindowConfig {
+  start_offset_min: number
+  end_offset_min: number
+  sample_interval_sec: number
+  lookback_before_start_sec: number
+  fill_method: HistoryFillMethod
+  strict_first_value: boolean
 }
 
 interface InputBindingRow {
@@ -41,6 +62,7 @@ interface InputBindingRow {
   source_tags: string[]
   source_mappings: SourceMappingRow[]
   output_format: BatchOutputFormat
+  window: HistoryWindowConfig
 }
 
 interface OutputBindingRow {
@@ -247,7 +269,7 @@ function applyDefaultDataSource() {
 }
 
 function defaultInputBinding(inputName = ''): InputBindingRow {
-  return {
+  const binding: InputBindingRow = {
     binding_type: 'single',
     input_name: inputName,
     data_source_id: dataSources.value[0] ? String(dataSources.value[0].id) : '',
@@ -255,6 +277,20 @@ function defaultInputBinding(inputName = ''): InputBindingRow {
     source_tags: [],
     source_mappings: [],
     output_format: 'named-map',
+    window: defaultHistoryWindow(),
+  }
+  applyManifestInputBindingHint(binding)
+  return binding
+}
+
+function defaultHistoryWindow(): HistoryWindowConfig {
+  return {
+    start_offset_min: 60,
+    end_offset_min: 0,
+    sample_interval_sec: 60,
+    lookback_before_start_sec: 600,
+    fill_method: 'ffill_then_interpolate',
+    strict_first_value: true,
   }
 }
 
@@ -305,6 +341,12 @@ function switchInputBindingType(binding: InputBindingRow, type: BindingType) {
     binding.input_name = ''
     syncManifestSourceMappings(binding)
   }
+  if (type === 'history') {
+    binding.output_format = 'named-map'
+    binding.source_mappings = []
+    if (!binding.window) binding.window = defaultHistoryWindow()
+    applyManifestInputBindingHint(binding, { preserveBindingType: true })
+  }
 }
 
 function switchOutputBindingType(binding: OutputBindingRow, type: BindingType) {
@@ -321,6 +363,7 @@ function onInputBindingDataSourceChange(binding: InputBindingRow) {
     return
   }
   binding.source_mappings = []
+  applyManifestInputBindingHint(binding, { preserveBindingType: true })
 }
 
 function onInputBindingOutputFormatChange(binding: InputBindingRow) {
@@ -343,6 +386,175 @@ function onBatchInputNameChange(binding: InputBindingRow) {
     return
   }
   binding.source_mappings = []
+}
+
+function onInputBindingNameChange(binding: InputBindingRow) {
+  applyManifestInputBindingHint(binding)
+  if (binding.binding_type === 'batch') {
+    onBatchInputNameChange(binding)
+  }
+}
+
+function manifestInputDefByName(name: string): ManifestInterfaceDef | null {
+  const normalized = name.trim()
+  if (!normalized) return null
+  return manifestInputDefs.value.find((item) => item.name === normalized) ?? null
+}
+
+function manifestInputBindingHint(binding: InputBindingRow): ManifestInputBindingHint | null {
+  return manifestInputBindingHintByName(binding.input_name)
+}
+
+function manifestInputBindingHintByName(inputName: string): ManifestInputBindingHint | null {
+  const inputDef = manifestInputDefByName(inputName)
+  if (!inputDef?.schema) return null
+  const schema = inputDef.schema
+  const raw = firstRecord(
+    schema.ippBinding,
+    schema.inputBinding,
+    schema['x-ipp-binding'],
+    schema.binding,
+  )
+  if (!raw) return null
+
+  const rawBindingType = stringValue(raw.bindingType ?? raw.binding_type).trim()
+  const bindingType = ['single', 'batch', 'history'].includes(rawBindingType) ? rawBindingType as BindingType : undefined
+  const rawConnectorType = stringValue(raw.connectorType ?? raw.connector_type ?? raw.requiredConnectorType ?? raw.required_connector_type).trim()
+  const connectorType = ['mock', 'redis', 'tdengine'].includes(rawConnectorType) ? rawConnectorType as 'mock' | 'redis' | 'tdengine' : undefined
+  const sourceTags = arrayOfStrings(raw.sourceTags ?? raw.source_tags ?? raw.requiredSourceTags ?? raw.required_source_tags)
+  const windowRaw = firstRecord(raw.window, raw.windowDefaults, raw.window_defaults)
+  const dataSource = firstRecord(raw.dataSource, raw.data_source, raw.datasource) ?? undefined
+
+  return {
+    bindingType,
+    connectorType,
+    sourceTags,
+    lockConnectorType: Boolean(raw.lockConnectorType ?? raw.lock_connector_type ?? connectorType),
+    lockSourceTags: Boolean(raw.lockSourceTags ?? raw.lock_source_tags ?? false),
+    window: windowRaw ? normalizePartialHistoryWindow(windowRaw) : undefined,
+    dataSource,
+  }
+}
+
+function applyManifestInputBindingHint(
+  binding: InputBindingRow,
+  options: { preserveBindingType?: boolean; preserveWindow?: boolean; preserveSourceTags?: boolean } = {},
+) {
+  const hint = manifestInputBindingHint(binding)
+  if (!hint) return
+
+  if (!options.preserveBindingType && hint.bindingType) {
+    binding.binding_type = hint.bindingType
+  }
+  if (hint.bindingType === 'history' || hint.connectorType === 'tdengine') {
+    binding.binding_type = 'history'
+  }
+  if (hint.connectorType) {
+    const matched = dataSources.value.find((source) => source.connector_type === hint.connectorType)
+    const current = findDataSource(binding.data_source_id)
+    if (!current || current.connector_type !== hint.connectorType) {
+      binding.data_source_id = matched ? String(matched.id) : ''
+    }
+  }
+  if (hint.sourceTags.length > 0 && !options.preserveSourceTags) {
+    binding.source_tags = [...hint.sourceTags]
+    if (binding.binding_type === 'batch') {
+      syncSourceMappings(binding)
+    }
+  }
+  if (hint.window && !options.preserveWindow) {
+    binding.window = { ...defaultHistoryWindow(), ...binding.window, ...hint.window }
+  }
+}
+
+function normalizePartialHistoryWindow(value: Record<string, unknown>): Partial<HistoryWindowConfig> {
+  const result: Partial<HistoryWindowConfig> = {}
+  if ('start_offset_min' in value || 'startOffsetMin' in value) {
+    result.start_offset_min = normalizeBoundedNumber(value.start_offset_min ?? value.startOffsetMin, 60, 1, 10080)
+  }
+  if ('end_offset_min' in value || 'endOffsetMin' in value) {
+    result.end_offset_min = normalizeBoundedNumber(value.end_offset_min ?? value.endOffsetMin, 0, 0, 10079)
+  }
+  if ('sample_interval_sec' in value || 'sampleIntervalSec' in value) {
+    result.sample_interval_sec = normalizeBoundedNumber(value.sample_interval_sec ?? value.sampleIntervalSec, 60, 1, 86400)
+  }
+  if ('lookback_before_start_sec' in value || 'lookbackBeforeStartSec' in value) {
+    result.lookback_before_start_sec = normalizeBoundedNumber(value.lookback_before_start_sec ?? value.lookbackBeforeStartSec, 600, 0, 86400)
+  }
+  const rawFillMethod = stringValue(value.fill_method ?? value.fillMethod).trim()
+  if (['ffill', 'interpolate', 'ffill_then_interpolate', 'none'].includes(rawFillMethod)) {
+    result.fill_method = rawFillMethod as HistoryFillMethod
+  }
+  if ('strict_first_value' in value || 'strictFirstValue' in value) {
+    result.strict_first_value = Boolean(value.strict_first_value ?? value.strictFirstValue)
+  }
+  return result
+}
+
+function historyTagsFromManifest(binding: InputBindingRow) {
+  return manifestInputBindingHint(binding)?.sourceTags ?? []
+}
+
+function hasManifestHistoryTags(binding: InputBindingRow) {
+  return historyTagsFromManifest(binding).length > 0
+}
+
+function applyManifestHistoryTags(binding: InputBindingRow) {
+  const tags = historyTagsFromManifest(binding)
+  if (tags.length > 0) {
+    binding.source_tags = [...tags]
+  }
+}
+
+function dataSourceAllowedForInputBinding(binding: InputBindingRow, source: DataSourceRecord) {
+  const hint = manifestInputBindingHint(binding)
+  if (!hint) return true
+  if (hint.connectorType && source.connector_type !== hint.connectorType) return false
+  return dataSourceMatchesManifestHint(source, hint)
+}
+
+function dataSourceMatchesManifestHint(source: DataSourceRecord, hint: ManifestInputBindingHint) {
+  const rule = hint.dataSource
+  if (!rule) return true
+  const expectedDatabase = stringValue(rule.database).trim()
+  const expectedTable = stringValue(rule.table_name ?? rule.tableName).trim()
+  if (expectedDatabase && stringValue(source.config.database).trim() !== expectedDatabase) return false
+  if (expectedTable) {
+    const actualTable = stringValue(source.config.table_name ?? source.config.tableName).trim()
+    if (actualTable !== expectedTable) return false
+  }
+  return true
+}
+
+function validateInputDataSourceConstraints(bindings: InputBindingRow[]) {
+  for (const binding of bindings) {
+    const hint = manifestInputBindingHint(binding)
+    if (!hint) continue
+    const source = findDataSource(binding.data_source_id)
+    if (hint.connectorType && (!source || source.connector_type !== hint.connectorType)) {
+      throw new Error(`插件输入 ${binding.input_name} 要求绑定 ${hint.connectorType} 数据源`)
+    }
+    if (source && !dataSourceMatchesManifestHint(source, hint)) {
+      throw new Error(`插件输入 ${binding.input_name} 绑定的数据源不符合 manifest 固化的数据库/表配置`)
+    }
+    if (hint.bindingType && binding.binding_type !== hint.bindingType) {
+      throw new Error(`插件输入 ${binding.input_name} 要求使用 ${hint.bindingType} 绑定模式`)
+    }
+    if (hint.sourceTags.length > 0) {
+      const selected = new Set(binding.source_tags.map((tag) => tag.trim()).filter(Boolean))
+      const missing = hint.sourceTags.filter((tag) => !selected.has(tag))
+      if (hint.lockSourceTags && missing.length > 0) {
+        throw new Error(`插件输入 ${binding.input_name} 缺少 manifest 声明位点: ${missing.join(', ')}`)
+      }
+    }
+  }
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | null {
+  for (const value of values) {
+    if (isRecord(value)) return value
+  }
+  return null
 }
 
 function inputOptions(binding: InputBindingRow) {
@@ -468,6 +680,7 @@ function manifestInterfaces(kind: 'inputs' | 'outputs'): ManifestInterfaceDef[] 
       type: stringValue(item.type).trim(),
       required: Boolean(item.required),
       description: stringValue(item.description).trim(),
+      schema: isRecord(item.schema) ? item.schema : null,
     }))
     .filter((item) => item.name)
 }
@@ -506,6 +719,9 @@ function collectInputBindingNames(bindings: Array<Record<string, unknown>>) {
 function inputBindingHasPayload(binding: InputBindingRow) {
   if (binding.binding_type === 'single') {
     return Boolean(binding.input_name.trim())
+  }
+  if (binding.binding_type === 'history') {
+    return Boolean(binding.input_name.trim()) && binding.source_tags.some((tag) => tag.trim())
   }
   if (binding.output_format === 'named-map' && !binding.input_name.trim()) {
     return binding.source_mappings.some((item) => item.tag.trim() || item.key.trim())
@@ -570,10 +786,31 @@ async function submit() {
   try {
     if (!form.value.name.trim()) throw new Error('请填写实例名')
     if (!form.value.package_name || !form.value.version) throw new Error('请选择插件和版本')
+    validateInputDataSourceConstraints(inputBindings.value)
 
     const normalizedInputBindings = inputBindings.value
       .filter((binding) => binding.data_source_id && inputBindingHasPayload(binding))
       .map((binding) => {
+        if (binding.binding_type === 'history') {
+          const input_name = binding.input_name.trim()
+          const source_tags = Array.from(new Set(binding.source_tags.map((tag) => tag.trim()).filter(Boolean)))
+          if (!input_name) throw new Error('TDEngine 历史读取必须指定插件输入名')
+          if (source_tags.length === 0) throw new Error(`TDEngine 历史读取绑定 ${input_name} 未选择任何位点`)
+          const windowConfig = normalizeHistoryWindow(binding.window)
+          if (windowConfig.start_offset_min <= windowConfig.end_offset_min) {
+            throw new Error('TDEngine 历史读取的起点偏移必须大于终点偏移')
+          }
+          if (windowConfig.sample_interval_sec <= 0) {
+            throw new Error('TDEngine 历史读取的点间隔必须大于 0 秒')
+          }
+          return {
+            binding_type: 'history' as const,
+            input_name,
+            data_source_id: Number(binding.data_source_id),
+            source_tags,
+            window: windowConfig,
+          }
+        }
         if (binding.binding_type === 'batch') {
           const input_name = binding.input_name.trim()
           const source_tags = Array.from(new Set(binding.source_tags.map((tag) => tag.trim()).filter(Boolean)))
@@ -755,6 +992,7 @@ async function editInstance(instance: PluginInstanceRecord) {
       source_tags,
       source_mappings,
       output_format: normalizeOutputFormat(record.output_format),
+      window: normalizeHistoryWindow(record.window),
     }
   })
   outputBindings.value = instance.output_bindings.map((binding) => {
@@ -769,6 +1007,9 @@ async function editInstance(instance: PluginInstanceRecord) {
     }
   })
   ensureRequiredInputBindings()
+  for (const binding of inputBindings.value) {
+    applyManifestInputBindingHint(binding, { preserveBindingType: true, preserveWindow: true })
+  }
   applyDefaultDataSource()
   isInstanceModalVisible.value = true
 }
@@ -784,7 +1025,34 @@ function normalizeSourceMappings(value: unknown, sourceTags: string[]) {
 }
 
 function normalizeBindingType(value: unknown): BindingType {
-  return value === 'batch' ? 'batch' : 'single'
+  if (value === 'batch') return 'batch'
+  if (value === 'history') return 'history'
+  return 'single'
+}
+
+function normalizeHistoryWindow(value: unknown): HistoryWindowConfig {
+  const record = isRecord(value) ? value : {}
+  return {
+    start_offset_min: normalizeBoundedNumber(record.start_offset_min, 60, 1, 10080),
+    end_offset_min: normalizeBoundedNumber(record.end_offset_min, 0, 0, 10080),
+    sample_interval_sec: normalizeBoundedNumber(record.sample_interval_sec, 60, 1, 86400),
+    lookback_before_start_sec: normalizeBoundedNumber(record.lookback_before_start_sec, 600, 0, 86400),
+    fill_method: normalizeHistoryFillMethod(record.fill_method),
+    strict_first_value: typeof record.strict_first_value === 'boolean' ? record.strict_first_value : true,
+  }
+}
+
+function normalizeBoundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const numberValue = Math.floor(Number(value))
+  if (!Number.isFinite(numberValue)) return fallback
+  return Math.min(max, Math.max(min, numberValue))
+}
+
+function normalizeHistoryFillMethod(value: unknown): HistoryFillMethod {
+  if (value === 'ffill' || value === 'interpolate' || value === 'ffill_then_interpolate' || value === 'none') {
+    return value
+  }
+  return 'ffill_then_interpolate'
 }
 
 function normalizeOutputFormat(value: unknown): BatchOutputFormat {
@@ -957,6 +1225,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function describeInputBinding(binding: InputBindingRow) {
   if (binding.binding_type === 'single') {
     return binding.source_tag ? `单点 · ${binding.source_tag}` : '单点 · 未配置位点'
+  }
+  if (binding.binding_type === 'history') {
+    const window = normalizeHistoryWindow(binding.window)
+    return `历史窗口 · ${binding.source_tags.length} 个位点 · ${window.start_offset_min}→${window.end_offset_min} 分钟 · ${window.sample_interval_sec}s 间隔`
   }
   if (binding.output_format === 'ordered-list') {
     return `批量列表 · ${binding.source_tags.length} 个位点`
@@ -1330,11 +1602,12 @@ onUnmounted(() => {
                 <select v-model="binding.binding_type" @change="switchInputBindingType(binding, binding.binding_type)">
                   <option value="single">单点</option>
                   <option value="batch">批量</option>
+                  <option value="history">TDEngine 历史窗口</option>
                 </select>
               </label>
               <label>
                 <span>插件输入名</span>
-                <select v-if="manifestInputDefs.length > 0" v-model="binding.input_name" @change="onBatchInputNameChange(binding)">
+                <select v-if="manifestInputDefs.length > 0" v-model="binding.input_name" @change="onInputBindingNameChange(binding)">
                   <option :value="''">{{ binding.binding_type === 'batch' ? '按 manifest 输入列表逐项映射' : '请选择 manifest 输入' }}</option>
                   <option v-for="item in manifestInputDefs" :key="item.name" :value="item.name">
                     {{ item.required ? `${item.name} *` : item.name }}
@@ -1346,8 +1619,13 @@ onUnmounted(() => {
                 <span>数据源</span>
                 <select v-model="binding.data_source_id" @change="onInputBindingDataSourceChange(binding)">
                   <option value="">请选择数据源</option>
-                  <option v-for="source in dataSources" :key="source.id" :value="String(source.id)">
-                    {{ source.name }}
+                  <option
+                    v-for="source in dataSources"
+                    :key="source.id"
+                    :value="String(source.id)"
+                    :disabled="!dataSourceAllowedForInputBinding(binding, source)"
+                  >
+                    {{ source.name }} · {{ source.connector_type }}
                   </option>
                 </select>
               </label>
@@ -1438,11 +1716,12 @@ onUnmounted(() => {
               <select v-model="activeInputBinding.binding_type" @change="switchInputBindingType(activeInputBinding, activeInputBinding.binding_type)">
                 <option value="single">单点</option>
                 <option value="batch">批量</option>
+                <option value="history">TDEngine 历史窗口</option>
               </select>
             </label>
             <label>
               <span>插件输入名</span>
-              <select v-if="manifestInputDefs.length > 0" v-model="activeInputBinding.input_name" @change="onBatchInputNameChange(activeInputBinding)">
+              <select v-if="manifestInputDefs.length > 0" v-model="activeInputBinding.input_name" @change="onInputBindingNameChange(activeInputBinding)">
                 <option :value="''">{{ activeInputBinding.binding_type === 'batch' ? '按 manifest 输入列表逐项映射' : '请选择 manifest 输入' }}</option>
                 <option v-for="item in manifestInputDefs" :key="item.name" :value="item.name">
                   {{ item.required ? `${item.name} *` : item.name }}
@@ -1454,8 +1733,13 @@ onUnmounted(() => {
               <span>数据源</span>
               <select v-model="activeInputBinding.data_source_id" @change="onInputBindingDataSourceChange(activeInputBinding)">
                 <option value="">请选择数据源</option>
-                <option v-for="source in dataSources" :key="source.id" :value="String(source.id)">
-                  {{ source.name }}
+                <option
+                  v-for="source in dataSources"
+                  :key="source.id"
+                  :value="String(source.id)"
+                  :disabled="!dataSourceAllowedForInputBinding(activeInputBinding, source)"
+                >
+                  {{ source.name }} · {{ source.connector_type }}
                 </option>
               </select>
             </label>
@@ -1477,6 +1761,69 @@ onUnmounted(() => {
                 <input v-model="activeInputBinding.source_tag" placeholder="如 sthb:DCS_AO_RTO_014_AI" />
               </label>
             </div>
+          </template>
+
+          <template v-else-if="activeInputBinding.binding_type === 'history'">
+            <div class="binding-basic-grid compact-grid">
+              <div class="binding-actions-inline inline-fill">
+                <button type="button" class="secondary-button" @click="selectAllInputTags(activeInputBinding)">全选位点</button>
+                <button type="button" class="secondary-button" @click="clearAllInputTags(activeInputBinding)">清空</button>
+                <span class="muted">已选 {{ activeInputBinding.source_tags.length }} 个历史位点</span>
+              </div>
+            </div>
+
+            <div v-if="hasManifestHistoryTags(activeInputBinding)" class="manifest-history-panel">
+              <div class="manifest-history-title">manifest 声明历史位点</div>
+              <div class="manifest-history-tags">
+                <span v-for="tag in historyTagsFromManifest(activeInputBinding)" :key="tag" class="manifest-history-tag">{{ tag }}</span>
+              </div>
+              <button type="button" class="secondary-button small-button" @click="applyManifestHistoryTags(activeInputBinding)">使用 manifest 位点</button>
+            </div>
+
+            <div v-if="inputOptions(activeInputBinding).length > 0" class="point-picker-grid">
+              <label v-for="point in inputOptions(activeInputBinding)" :key="point.tag" class="point-check checkbox-box">
+                <input
+                  type="checkbox"
+                  :checked="activeInputBinding.source_tags.includes(point.tag)"
+                  @change="updateInputTagSelection(activeInputBinding, point.tag, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ point.label }}</span>
+              </label>
+            </div>
+            <div v-else class="empty-inline">当前 TDEngine 数据源未配置可读位点。</div>
+
+            <div class="history-window-grid">
+              <label>
+                <span>起点：当前时间前 N 分钟</span>
+                <input v-model.number="activeInputBinding.window.start_offset_min" type="number" min="1" step="1" />
+              </label>
+              <label>
+                <span>终点：当前时间前 N 分钟</span>
+                <input v-model.number="activeInputBinding.window.end_offset_min" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>点间隔（秒）</span>
+                <input v-model.number="activeInputBinding.window.sample_interval_sec" type="number" min="1" step="1" />
+              </label>
+              <label>
+                <span>首值回溯（秒）</span>
+                <input v-model.number="activeInputBinding.window.lookback_before_start_sec" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>缺失值策略</span>
+                <select v-model="activeInputBinding.window.fill_method">
+                  <option value="ffill_then_interpolate">前向填充 + 时间插值</option>
+                  <option value="ffill">仅前向填充</option>
+                  <option value="interpolate">仅时间插值</option>
+                  <option value="none">保留空值</option>
+                </select>
+              </label>
+              <label class="checkbox-box history-checkbox">
+                <input v-model="activeInputBinding.window.strict_first_value" type="checkbox" />
+                <span>首行仍缺值时阻止运行</span>
+              </label>
+            </div>
+            <p class="muted history-note">起点偏移必须大于终点偏移。例如起点 60、终点 0 表示读取最近 60 分钟至当前时间的数据。</p>
           </template>
 
           <template v-else>
@@ -2154,6 +2501,13 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
 .binding-list-actions { display: flex; gap: 12px; }
 .binding-basic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
 .binding-single-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.manifest-history-panel { margin-top: 16px; padding: 14px; border: 1px solid #bfdbfe; border-radius: 14px; background: #eff6ff; display: grid; gap: 10px; }
+.manifest-history-title { font-weight: 700; color: #1e40af; }
+.manifest-history-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.manifest-history-tag { padding: 4px 10px; border-radius: 999px; background: #dbeafe; color: #1e3a8a; font-size: 12px; font-weight: 600; }
+.history-window-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
+.history-checkbox { align-self: end; min-height: 40px; }
+.history-note { margin-top: 12px; }
 .compact-grid { align-items: end; }
 .inline-fill { grid-column: 1 / -1; }
 .binding-actions-inline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -2273,7 +2627,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
 }
 
 @media (max-width: 1024px) {
-  .instance-form-grid, .binding-basic-grid, .binding-single-grid, .manifest-summary, .compact-grid { grid-template-columns: 1fr; gap: 16px; }
+  .instance-form-grid, .binding-basic-grid, .binding-single-grid, .history-window-grid, .manifest-summary, .compact-grid { grid-template-columns: 1fr; gap: 16px; }
   .mapping-row { grid-template-columns: 1fr; }
   .schedule-select-row { grid-template-columns: 1fr; }
   .binding-summary-card { flex-direction: column; }

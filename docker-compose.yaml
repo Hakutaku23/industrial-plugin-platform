@@ -43,6 +43,32 @@ services:
       timeout: 5s
       retries: 20
 
+  tdengine:
+    image: tdengine/tdengine:latest
+    container_name: ipp-tdengine
+    hostname: ipp-tdengine
+    restart: unless-stopped
+    ports:
+      - "6030:6030"
+      - "6041:6041"
+      - "6043-6049:6043-6049"
+      - "6043-6049:6043-6049/udp"
+    environment:
+      TZ: "Asia/Shanghai"
+    volumes:
+      - tdengine_data:/var/lib/taos
+      - tdengine_log:/var/log/taos
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "taos -s 'show databases;' >/dev/null 2>&1 || wget -qO- --user=root --password=taosdata --post-data='show databases;' http://127.0.0.1:6041/rest/sql >/dev/null 2>&1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   dev:
     image: ipp-platform-dev:v0.1
     container_name: ipp-platform-dev
@@ -58,10 +84,18 @@ services:
       - ./:/workspace
     environment:
       TZ: "Asia/Shanghai"
+      TDENGINE_URL: "http://tdengine:6041"
+      TDENGINE_USER: "root"
+      TDENGINE_PASSWORD: "taosdata"
+      TDENGINE_DATABASE: "ipp_test"
+      TDENGINE_TABLE_NAME: "point_history"
     depends_on:
       - redis
       - mysql
+      - tdengine
 
 volumes:
   redis_data:
   mysql_data:
+  tdengine_data:
+  tdengine_log:

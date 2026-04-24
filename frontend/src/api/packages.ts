@@ -102,8 +102,9 @@ export interface DataSourceSavePayload {
   write_enabled: boolean
 }
 
-export type BindingType = 'single' | 'batch'
+export type BindingType = 'single' | 'batch' | 'history'
 export type InputBatchOutputFormat = 'named-map' | 'ordered-list'
+export type HistoryFillMethod = 'ffill' | 'interpolate' | 'ffill_then_interpolate' | 'none'
 
 export interface SingleInputBinding {
   binding_type?: 'single'
@@ -126,7 +127,22 @@ export interface BatchInputBinding {
   output_format?: InputBatchOutputFormat
 }
 
-export type InputBinding = SingleInputBinding | BatchInputBinding
+export interface HistoryInputBinding {
+  binding_type: 'history'
+  input_name: string
+  data_source_id: number
+  source_tags: string[]
+  window: {
+    start_offset_min: number
+    end_offset_min: number
+    sample_interval_sec: number
+    lookback_before_start_sec?: number
+    fill_method?: HistoryFillMethod
+    strict_first_value?: boolean
+  }
+}
+
+export type InputBinding = SingleInputBinding | BatchInputBinding | HistoryInputBinding
 
 export interface SingleOutputBinding {
   binding_type?: 'single'

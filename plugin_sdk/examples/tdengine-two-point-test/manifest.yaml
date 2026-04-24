@@ -1,0 +1,77 @@
+apiVersion: plugin.platform/v1
+kind: PluginPackage
+metadata:
+  name: tdengine-two-point-test
+  displayName: TDengine 双点位历史窗口测试插件
+  version: 0.1.0
+  author: PSELAB
+  description: 使用 TDengine 历史窗口输入，统计 DCS_AO_001 与 DCS_AO_002 的均值、末值和差值。
+  tags:
+    - tdengine
+    - history
+    - test
+spec:
+  pluginType: python
+  packageFormat: directory
+  entry:
+    mode: function
+    file: runtime/main.py
+    callable: run
+  runtime:
+    pythonVersion: '3.12'
+    timeoutSec: 30
+    memoryMB: 256
+    workingDir: .
+  schedule:
+    type: manual
+  inputs:
+    - name: history_df
+      type: dataframe
+      required: true
+      description: 平台从 TDengine 读取后传入的 dataframe split payload。
+      schema:
+        ippBinding:
+          bindingType: history
+          connectorType: tdengine
+          lockConnectorType: true
+          dataSource:
+            database: ipp_test
+            table_name: point_history
+          sourceTags:
+            - DCS_AO_001
+            - DCS_AO_002
+          lockSourceTags: true
+          window:
+            start_offset_min: 60
+            end_offset_min: 0
+            sample_interval_sec: 60
+            lookback_before_start_sec: 600
+            fill_method: ffill_then_interpolate
+            strict_first_value: true
+  outputs:
+    - name: ao_001_mean
+      type: number
+      required: false
+      description: DCS_AO_001 均值
+    - name: ao_002_mean
+      type: number
+      required: false
+      description: DCS_AO_002 均值
+    - name: latest_delta
+      type: number
+      required: false
+      description: 最新时刻 DCS_AO_001 - DCS_AO_002
+    - name: row_count
+      type: integer
+      required: false
+      description: 输入历史窗口行数
+  permissions:
+    network: false
+    filesystem: none
+    writeback: false
+    subprocess: false
+compatibility:
+  platformApi: '>=0.2.0'
+  runnerApi: '>=0.1.0'
+  supportedEnvironments:
+    - dev

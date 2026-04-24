@@ -23,6 +23,71 @@ def validate_instance_bindings(
     )
 
 
+def validate_instance_binding_data_sources(
+    *,
+    manifest: PluginManifest,
+    input_bindings: list[dict[str, Any]],
+    data_source_resolver,
+) -> None:
+    interface_by_name = {item.name: item for item in manifest.spec.inputs}
+    for index, binding in enumerate(input_bindings, start=1):
+        if not isinstance(binding, dict):
+            continue
+        binding_type = str(binding.get('binding_type', 'single')).strip().lower() or 'single'
+        binding_name = str(binding.get('input_name', '')).strip()
+        if not binding_name:
+            continue
+        interface = interface_by_name.get(binding_name)
+        if interface is None:
+            continue
+        rule = _manifest_input_binding_rule(interface)
+        if not rule:
+            continue
+
+        required_binding_type = _string_field(rule, 'bindingType', 'binding_type')
+        if required_binding_type and binding_type != required_binding_type:
+            raise BindingValidationError(
+                f'input binding {binding_name} must use binding_type={required_binding_type}'
+            )
+
+        required_connector_type = _string_field(
+            rule,
+            'connectorType',
+            'connector_type',
+            'requiredConnectorType',
+            'required_connector_type',
+        )
+        if required_connector_type:
+            try:
+                data_source_id = int(binding.get('data_source_id'))
+            except (TypeError, ValueError) as exc:
+                raise BindingValidationError(
+                    f'input binding {binding_name} has invalid data_source_id'
+                ) from exc
+            data_source = data_source_resolver(data_source_id)
+            actual_connector_type = str((data_source or {}).get('connector_type', '')).strip()
+            if actual_connector_type != required_connector_type:
+                raise BindingValidationError(
+                    f'input binding {binding_name} requires {required_connector_type} data source, got {actual_connector_type or "missing"}'
+                )
+            _validate_manifest_data_source_rule(binding_name, data_source or {}, rule)
+
+        declared_tags = _normalize_tags(
+            rule.get('sourceTags')
+            or rule.get('source_tags')
+            or rule.get('requiredSourceTags')
+            or rule.get('required_source_tags')
+        )
+        if declared_tags and binding_type == 'history':
+            selected_tags = set(_normalize_tags(binding.get('source_tags')))
+            lock_source_tags = bool(rule.get('lockSourceTags') or rule.get('lock_source_tags'))
+            missing_tags = [tag for tag in declared_tags if tag not in selected_tags]
+            if lock_source_tags and missing_tags:
+                raise BindingValidationError(
+                    f'input binding {binding_name} is missing manifest-required source tags: {", ".join(missing_tags)}'
+                )
+
+
 def validate_execution_inputs(*, manifest: PluginManifest, inputs: dict[str, Any]) -> None:
     declared_names = {item.name for item in manifest.spec.inputs}
     required_names = {item.name for item in manifest.spec.inputs if item.required}
@@ -57,7 +122,7 @@ def _validate_input_bindings(
             raise BindingValidationError(f"input_name binding #{index} must be an object")
 
         binding_type = str(binding.get("binding_type", "single")).strip().lower() or "single"
-        if binding_type not in {"single", "batch"}:
+        if binding_type not in {"single", "batch", "history"}:
             raise BindingValidationError(
                 f"input_name binding #{index} uses unsupported binding_type: {binding_type}"
             )
@@ -70,6 +135,33 @@ def _validate_input_bindings(
             if not source_tag:
                 raise BindingValidationError(
                     f"single input_name binding {binding_name} has no source_tag"
+                )
+            provided_names.append(binding_name)
+            if binding_name in seen_names:
+                duplicate_names.add(binding_name)
+            seen_names.add(binding_name)
+            continue
+
+        if binding_type == "history":
+            binding_name = str(binding.get("input_name", "")).strip()
+            if not binding_name:
+                raise BindingValidationError(f"history input binding #{index} has an empty name")
+            source_tags = _normalize_tags(binding.get("source_tags"))
+            if not source_tags:
+                raise BindingValidationError(
+                    f"history input binding {binding_name} has no source_tags"
+                )
+            window = binding.get("window") if isinstance(binding.get("window"), dict) else {}
+            start_offset = _int_field(window.get("start_offset_min", binding.get("start_offset_min", 60)), "start_offset_min")
+            end_offset = _int_field(window.get("end_offset_min", binding.get("end_offset_min", 0)), "end_offset_min")
+            sample_interval = _int_field(window.get("sample_interval_sec", binding.get("sample_interval_sec", 60)), "sample_interval_sec")
+            if start_offset <= end_offset:
+                raise BindingValidationError(
+                    f"history input binding {binding_name} requires start_offset_min > end_offset_min"
+                )
+            if sample_interval <= 0:
+                raise BindingValidationError(
+                    f"history input binding {binding_name} requires positive sample_interval_sec"
                 )
             provided_names.append(binding_name)
             if binding_name in seen_names:
@@ -214,6 +306,44 @@ def _validate_named_bindings(
         )
 
 
+def _validate_manifest_data_source_rule(binding_name: str, data_source: dict[str, Any], rule: dict[str, Any]) -> None:
+    data_source_rule = rule.get('dataSource') or rule.get('data_source') or rule.get('datasource')
+    if not isinstance(data_source_rule, dict):
+        return
+    config = data_source.get('config') if isinstance(data_source.get('config'), dict) else {}
+    expected_database = _string_field(data_source_rule, 'database')
+    if expected_database and str(config.get('database', '')).strip() != expected_database:
+        raise BindingValidationError(
+            f'input binding {binding_name} requires TDengine database={expected_database}'
+        )
+    expected_table = _string_field(data_source_rule, 'table_name', 'tableName')
+    if expected_table:
+        actual_table = str(config.get('table_name', config.get('tableName', ''))).strip()
+        if actual_table != expected_table:
+            raise BindingValidationError(
+                f'input binding {binding_name} requires TDengine table_name={expected_table}'
+            )
+
+
+def _manifest_input_binding_rule(interface: InterfaceSpec) -> dict[str, Any] | None:
+    schema = interface.schema_
+    if not isinstance(schema, dict):
+        return None
+    for key in ('ippBinding', 'inputBinding', 'x-ipp-binding', 'binding'):
+        value = schema.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _string_field(record: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+
 def _normalize_source_mappings(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
@@ -252,3 +382,10 @@ def _duplicate_names(values: list[str]) -> list[str]:
         else:
             seen.add(value)
     return sorted(duplicates)
+
+
+def _int_field(value: Any, field: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise BindingValidationError(f"{field} must be an integer") from exc
