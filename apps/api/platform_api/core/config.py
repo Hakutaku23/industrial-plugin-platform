@@ -4,7 +4,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     result = dict(base)
@@ -15,32 +17,41 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
             result[key] = value
     return result
 
+
 def _load_yaml_file(path: Path) -> dict[str, Any]:
     try:
         import yaml  # type: ignore
     except ImportError as exc:
-        raise RuntimeError('PyYAML is required for platform YAML config loading. Install it with: pip install pyyaml') from exc
+        raise RuntimeError(
+            'PyYAML is required for platform YAML config loading. Install it with: pip install pyyaml'
+        ) from exc
+
     loaded = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
     if not isinstance(loaded, dict):
         raise ValueError(f'config file must contain a mapping object: {path}')
     return loaded
 
+
 def _load_json_file(path: Path) -> dict[str, Any]:
     import json
+
     loaded = json.loads(path.read_text(encoding='utf-8'))
     if not isinstance(loaded, dict):
         raise ValueError(f'config file must contain a mapping object: {path}')
     return loaded
 
+
 def _load_structured_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
+
     suffixes = [suffix.lower() for suffix in path.suffixes]
     if suffixes and suffixes[-1] in {'.yaml', '.yml'}:
         return _load_yaml_file(path)
     if suffixes and suffixes[-1] == '.json':
         return _load_json_file(path)
     raise ValueError(f'unsupported config file format: {path}')
+
 
 def _set_nested(target: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
     cursor = target
@@ -52,6 +63,7 @@ def _set_nested(target: dict[str, Any], path: tuple[str, ...], value: Any) -> No
         cursor = node
     cursor[path[-1]] = value
 
+
 def _env_str(name: str) -> str | None:
     value = os.getenv(name)
     if value is None:
@@ -59,11 +71,13 @@ def _env_str(name: str) -> str | None:
     stripped = value.strip()
     return stripped or None
 
+
 def _env_bool(name: str) -> bool | None:
     value = _env_str(name)
     if value is None:
         return None
     return value.lower() in {'1', 'true', 'yes', 'on'}
+
 
 def _env_float(name: str) -> float | None:
     value = _env_str(name)
@@ -71,11 +85,13 @@ def _env_float(name: str) -> float | None:
         return None
     return float(value)
 
+
 def _env_int(name: str) -> int | None:
     value = _env_str(name)
     if value is None:
         return None
     return int(value)
+
 
 def _resolve_path(project_root: Path, value: str | Path) -> Path:
     path = value if isinstance(value, Path) else Path(value)
@@ -83,18 +99,22 @@ def _resolve_path(project_root: Path, value: str | Path) -> Path:
         return path
     return (project_root / path).resolve()
 
+
 class AppSettings(BaseModel):
-    name: str = 'industrial-algorithm-operations-center'
+    name: str = 'industrial-plugin-platform'
     environment: str = 'dev'
+
 
 class StorageSettings(BaseModel):
     package_storage_dir: Path = Path('var/packages')
     run_storage_dir: Path = Path('var/runs')
 
+
 class MetadataSettings(BaseModel):
     backend: str = 'sqlite'
     sqlite_path: Path = Path('var/platform.sqlite3')
     db_url: str | None = None
+
 
 class SchedulerSettings(BaseModel):
     enabled: bool = True
@@ -116,6 +136,7 @@ class SchedulerSettings(BaseModel):
     daemon_max_parallel_dispatch: int = 1
     recovery_interval_sec: int = 15
 
+
 class RunnerSettings(BaseModel):
     default_timeout_sec: int = 30
     max_timeout_sec: int = 300
@@ -128,15 +149,17 @@ class RunnerSettings(BaseModel):
     cleanup_max_age_sec: int = 7 * 24 * 60 * 60
     cleanup_stale_incomplete_age_sec: int = 24 * 60 * 60
     cleanup_sweep_interval_sec: int = 10 * 60
-    max_stdout_bytes: int = 128 * 1024
-    max_stderr_bytes: int = 128 * 1024
+    max_stdout_bytes: int = 256 * 1024
+    max_stderr_bytes: int = 256 * 1024
     max_output_json_bytes: int = 512 * 1024
-    max_workdir_total_bytes: int = 2 * 1024 * 1024
-    allow_subprocess_default: bool = True
-    allow_network_default: bool = True
+    max_workdir_total_bytes: int = 10 * 1024 * 1024
+    allow_subprocess_default: bool = False
+    allow_network_default: bool = False
+
 
 class LoggingSettings(BaseModel):
     level: str = 'INFO'
+
 
 class RedisDefaults(BaseModel):
     default_host: str = '127.0.0.1'
@@ -145,14 +168,17 @@ class RedisDefaults(BaseModel):
     default_connect_timeout_sec: float = 2.0
     default_socket_timeout_sec: float = 2.0
 
+
 class ConnectorRetrySettings(BaseModel):
     max_attempts: int = 3
     base_delay_sec: float = 1.0
     max_delay_sec: float = 8.0
 
+
 class ConnectorSettings(BaseModel):
     redis: RedisDefaults = Field(default_factory=RedisDefaults)
     retry: ConnectorRetrySettings = Field(default_factory=ConnectorRetrySettings)
+
 
 class SecuritySettings(BaseModel):
     enabled: bool = False
@@ -169,6 +195,7 @@ class SecuritySettings(BaseModel):
     bootstrap_admin_display_name: str = 'Platform Administrator'
     bootstrap_admin_email: str | None = None
 
+
 class LicenseSettings(BaseModel):
     enabled: bool = True
     storage_dir: Path = Path('var/license')
@@ -176,14 +203,20 @@ class LicenseSettings(BaseModel):
     state_file_name: str = 'state.json'
     installation_id_file_name: str = 'installation_id'
     public_keys_file: Path = Path('config/license_public_keys.json')
+    revocations_file: Path = Path('config/license_revocations.json')
     cache_ttl_sec: int = 5
+    grace_days_default: int = 0
+    allow_package_upload_default: bool = True
+    allowed_connector_types_default: list[str] | None = None
     machine_id_paths: list[str] = Field(default_factory=lambda: ['/host/etc/machine-id', '/etc/machine-id'])
     hostname_paths: list[str] = Field(default_factory=lambda: ['/host/etc/hostname', '/etc/hostname'])
+
 
 class UISettings(BaseModel):
     serve_dist: bool = True
     dist_dir: Path = Path('frontend/dist')
     index_file: str = 'index.html'
+
 
 class Settings(BaseModel):
     project_root: Path
@@ -218,11 +251,13 @@ class Settings(BaseModel):
     def metadata_database(self) -> str | Path:
         return self.metadata.db_url or self.metadata.sqlite_path
 
+
 def _base_project_root() -> Path:
     value = _env_str('PLATFORM_PROJECT_ROOT')
     if value is None:
         return PROJECT_ROOT
     return _resolve_path(PROJECT_ROOT, value)
+
 
 def _first_existing(*paths: Path) -> Path | None:
     for path in paths:
@@ -230,12 +265,22 @@ def _first_existing(*paths: Path) -> Path | None:
             return path
     return None
 
+
 def _load_raw_config(project_root: Path) -> dict[str, Any]:
     config: dict[str, Any] = {}
-    base_file = _first_existing(project_root / 'config/platform.yaml', project_root / 'config/platform.yml', project_root / 'config/platform.json')
+
+    base_file = _first_existing(
+        project_root / 'config/platform.yaml',
+        project_root / 'config/platform.yml',
+        project_root / 'config/platform.json',
+    )
     if base_file is not None:
         config = _deep_merge(config, _load_structured_file(base_file))
-    environment = _env_str('PLATFORM_ENVIRONMENT') or (config.get('app', {}).get('environment') if isinstance(config.get('app'), dict) else None) or 'dev'
+
+    environment = _env_str('PLATFORM_ENVIRONMENT') or (
+        config.get('app', {}).get('environment') if isinstance(config.get('app'), dict) else None
+    ) or 'dev'
+
     env_file = _first_existing(
         project_root / f'config/platform.{environment}.yaml',
         project_root / f'config/platform.{environment}.yml',
@@ -243,14 +288,17 @@ def _load_raw_config(project_root: Path) -> dict[str, Any]:
     )
     if env_file is not None:
         config = _deep_merge(config, _load_structured_file(env_file))
+
     explicit_file = _env_str('PLATFORM_CONFIG_FILE')
     if explicit_file:
         config = _deep_merge(config, _load_structured_file(_resolve_path(project_root, explicit_file)))
+
     return config
+
 
 def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     updated = dict(config)
-    mapping = [
+    mapping: list[tuple[str, tuple[str, ...], Any]] = [
         ('PLATFORM_ENVIRONMENT', ('app', 'environment'), _env_str('PLATFORM_ENVIRONMENT')),
         ('PLATFORM_PACKAGE_STORAGE_DIR', ('storage', 'package_storage_dir'), _env_str('PLATFORM_PACKAGE_STORAGE_DIR')),
         ('PLATFORM_RUN_STORAGE_DIR', ('storage', 'run_storage_dir'), _env_str('PLATFORM_RUN_STORAGE_DIR')),
@@ -308,30 +356,46 @@ def _apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         ('PLATFORM_LICENSE_ENABLED', ('license', 'enabled'), _env_bool('PLATFORM_LICENSE_ENABLED')),
         ('PLATFORM_LICENSE_STORAGE_DIR', ('license', 'storage_dir'), _env_str('PLATFORM_LICENSE_STORAGE_DIR')),
         ('PLATFORM_LICENSE_PUBLIC_KEYS_FILE', ('license', 'public_keys_file'), _env_str('PLATFORM_LICENSE_PUBLIC_KEYS_FILE')),
+        ('PLATFORM_LICENSE_REVOCATIONS_FILE', ('license', 'revocations_file'), _env_str('PLATFORM_LICENSE_REVOCATIONS_FILE')),
+        ('PLATFORM_LICENSE_GRACE_DAYS_DEFAULT', ('license', 'grace_days_default'), _env_int('PLATFORM_LICENSE_GRACE_DAYS_DEFAULT')),
+        ('PLATFORM_LICENSE_ALLOW_PACKAGE_UPLOAD_DEFAULT', ('license', 'allow_package_upload_default'), _env_bool('PLATFORM_LICENSE_ALLOW_PACKAGE_UPLOAD_DEFAULT')),
+        ('PLATFORM_LICENSE_ALLOWED_CONNECTOR_TYPES_DEFAULT', ('license', 'allowed_connector_types_default'), [item.strip() for item in (_env_str('PLATFORM_LICENSE_ALLOWED_CONNECTOR_TYPES_DEFAULT') or '').split(',') if item.strip()] or None),
         ('PLATFORM_UI_SERVE_DIST', ('ui', 'serve_dist'), _env_bool('PLATFORM_UI_SERVE_DIST')),
         ('PLATFORM_UI_DIST_DIR', ('ui', 'dist_dir'), _env_str('PLATFORM_UI_DIST_DIR')),
     ]
-    for _, path, value in mapping:
+    for _name, path, value in mapping:
         if value is not None:
             _set_nested(updated, path, value)
     return updated
 
+
 def _resolve_path_fields(project_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     result = _deep_merge({}, payload)
+
     storage = result.setdefault('storage', {})
-    storage['package_storage_dir'] = str(_resolve_path(project_root, storage.get('package_storage_dir', 'var/packages')))
-    storage['run_storage_dir'] = str(_resolve_path(project_root, storage.get('run_storage_dir', 'var/runs')))
+    storage['package_storage_dir'] = str(
+        _resolve_path(project_root, storage.get('package_storage_dir', 'var/packages'))
+    )
+    storage['run_storage_dir'] = str(
+        _resolve_path(project_root, storage.get('run_storage_dir', 'var/runs'))
+    )
+
     metadata = result.setdefault('metadata', {})
     sqlite_path = metadata.get('sqlite_path', 'var/platform.sqlite3')
     metadata['sqlite_path'] = str(_resolve_path(project_root, sqlite_path))
+
     runner = result.setdefault('runner', {})
     runner['work_root'] = str(_resolve_path(project_root, runner.get('work_root', 'var/runs')))
+
     license_section = result.setdefault('license', {})
     license_section['storage_dir'] = str(_resolve_path(project_root, license_section.get('storage_dir', 'var/license')))
     license_section['public_keys_file'] = str(_resolve_path(project_root, license_section.get('public_keys_file', 'config/license_public_keys.json')))
+    license_section['revocations_file'] = str(_resolve_path(project_root, license_section.get('revocations_file', 'config/license_revocations.json')))
+
     ui = result.setdefault('ui', {})
     ui['dist_dir'] = str(_resolve_path(project_root, ui.get('dist_dir', 'frontend/dist')))
     return result
+
 
 def load_settings() -> Settings:
     project_root = _base_project_root()
@@ -340,5 +404,6 @@ def load_settings() -> Settings:
     normalized = _resolve_path_fields(project_root, overridden)
     normalized['project_root'] = str(project_root)
     return Settings.model_validate(normalized)
+
 
 settings = load_settings()
