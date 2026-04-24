@@ -64,7 +64,7 @@ onMounted(refresh)
       </div>
       <div class="hero-actions">
         <button class="primary" @click="refresh" :disabled="loading">{{ loading ? '刷新中…' : '刷新看板' }}</button>
-        <RouterLink class="secondary-link" to="/system/observability">进入系统观测</RouterLink>
+        <RouterLink class="secondary-link" to="/system/observability">系统总状态</RouterLink>
       </div>
     </header>
 
@@ -125,27 +125,27 @@ onMounted(refresh)
         </div>
         <div class="center-grid">
           <RouterLink class="center-card" to="/packages/upload">
-            <strong>算法上传中心</strong>
+            <strong>插件上传</strong>
             <p>上传、更新、校验插件包。</p>
           </RouterLink>
           <RouterLink class="center-card" to="/packages">
-            <strong>算法资产中心</strong>
+            <strong>插件管理</strong>
             <p>查看插件版本、摘要与资产清单。</p>
           </RouterLink>
           <RouterLink class="center-card" to="/data-sources">
-            <strong>数据接入中心</strong>
+            <strong>数据源管理</strong>
             <p>管理数据源连接与读写开关。</p>
           </RouterLink>
           <RouterLink class="center-card" to="/instances">
-            <strong>实例编排中心</strong>
+            <strong>实例编排</strong>
             <p>配置输入输出绑定、参数与定时计划。</p>
           </RouterLink>
           <RouterLink class="center-card" to="/runs">
-            <strong>运行监管中心</strong>
+            <strong>运行监管</strong>
             <p>查看运行状态、日志、写回与异常。</p>
           </RouterLink>
           <RouterLink class="center-card" to="/system/observability">
-            <strong>系统观测中心</strong>
+            <strong>系统总状态</strong>
             <p>查看调度器、锁、授权与近 24h 运行统计。</p>
           </RouterLink>
         </div>
@@ -186,28 +186,61 @@ onMounted(refresh)
 
 <style scoped>
 .home-page { display: grid; gap: 20px; }
-.hero { display: flex; justify-content: space-between; gap: 20px; align-items: flex-end; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #fff; border-radius: 18px; padding: 28px 32px; }
-.eyebrow { margin: 0 0 8px; color: #93c5fd; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
-.hero h1 { margin: 0 0 10px; font-size: 32px; }
-.subtitle { margin: 0; color: #cbd5e1; max-width: 760px; }
+
+/* 调整后的 Hero 区域，与 Header 风格统一 */
+.hero { 
+  display: flex; 
+  justify-content: space-between; 
+  gap: 20px; 
+  align-items: flex-end; 
+  background: linear-gradient(135deg, #ffffff 0%, #edf5f2 100%); /* 浅白到浅青绿渐变 */
+  border: 1px solid #d8e3df; /* 边框与 topbar 统一 */
+  border-radius: 18px; 
+  padding: 28px 32px; 
+}
+.eyebrow { margin: 0 0 8px; color: #12685f; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+.hero h1 { margin: 0 0 10px; font-size: 32px; color: #1f2f2c; }
+.subtitle { margin: 0; color: #5e6f6c; max-width: 760px; font-size: 14px; }
+
 .hero-actions { display: flex; gap: 12px; align-items: center; }
-.primary, .secondary-link { min-height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid transparent; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; cursor: pointer; }
-.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-.secondary-link { background: rgba(255,255,255,0.08); color: #fff; border-color: rgba(255,255,255,0.14); }
+.primary, .secondary-link { 
+  min-height: 40px; 
+  padding: 0 16px; 
+  border-radius: 8px; 
+  display: inline-flex; 
+  align-items: center; 
+  justify-content: center; 
+  text-decoration: none; 
+  cursor: pointer; 
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+/* 主按钮统一为品牌青绿色 */
+.primary { background: #12685f; color: #fff; border: 1px solid #12685f; }
+.primary:hover { background: #0e524b; border-color: #0e524b; }
+.primary:disabled { opacity: 0.7; cursor: not-allowed; }
+
+/* 次要按钮配合 Header 风格 */
+.secondary-link { background: #ffffff; color: #2f403d; border: 1px solid #bacac5; }
+.secondary-link:hover { background: #edf5f2; color: #12685f; }
+
 .banner.error { background: #fee2e2; color: #991b1b; padding: 12px 14px; border-radius: 8px; }
+
 .dashboard-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
 .metric-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px; display: grid; gap: 8px; }
 .metric-card span { color: #64748b; font-size: 13px; }
-.metric-card strong { font-size: 28px; color: #0f172a; }
+.metric-card strong { font-size: 28px; color: #1f2f2c; }
 .metric-card small { color: #64748b; }
-.metric-card.status.ok { background: #f0fdf4; }
-.metric-card.status.warn { background: #fff7ed; }
+.metric-card.status.ok { background: #f0fdf4; border-color: #bbf7d0; }
+.metric-card.status.warn { background: #fff7ed; border-color: #fed7aa; }
+
 .panel-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
 .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; }
 .wide-card { grid-column: 1 / -1; }
 .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.card-head h2 { margin: 0; font-size: 18px; }
+.card-head h2 { margin: 0; font-size: 18px; color: #1f2f2c; }
 .card-head span { color: #64748b; font-size: 13px; }
+
 .stats-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .stat { padding: 14px; border-radius: 10px; display: grid; gap: 6px; }
 .stat span { font-size: 12px; color: #475569; }
@@ -217,20 +250,25 @@ onMounted(refresh)
 .stat.error { background: #fee2e2; color: #991b1b; }
 .stat.timeout { background: #e0f2fe; color: #0c4a6e; }
 .stat.skipped { background: #f1f5f9; color: #334155; }
+
 .center-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.center-card { display: grid; gap: 8px; padding: 18px; border: 1px solid #dbeafe; border-radius: 12px; text-decoration: none; color: inherit; background: #f8fbff; }
-.center-card:hover { border-color: #93c5fd; background: #eff6ff; }
-.center-card strong { color: #0f172a; }
-.center-card p { margin: 0; color: #64748b; font-size: 14px; }
+/* 入口卡片也去除了突兀的蓝色调，调整为青绿灰风格 */
+.center-card { display: grid; gap: 8px; padding: 18px; border: 1px solid #d8e3df; border-radius: 12px; text-decoration: none; color: inherit; background: #fafcfb; transition: all 0.2s ease; }
+.center-card:hover { border-color: #9db8b1; background: #edf5f2; }
+.center-card strong { color: #1f2f2c; }
+.center-card p { margin: 0; color: #5e6f6c; font-size: 14px; }
+
 .kv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .kv-grid > div { display: grid; gap: 4px; padding: 12px; background: #f8fafc; border-radius: 8px; }
 .kv-grid span { color: #64748b; font-size: 12px; }
-.kv-grid strong { color: #0f172a; font-size: 14px; overflow-wrap: anywhere; }
+.kv-grid strong { color: #1f2f2c; font-size: 14px; overflow-wrap: anywhere; }
+
 .event-list { display: grid; gap: 12px; }
 .event-item { padding: 14px; background: #f8fafc; border-radius: 10px; display: grid; gap: 6px; }
-.event-item strong { color: #0f172a; }
-.event-item span, .event-item p { color: #64748b; margin: 0; }
+.event-item strong { color: #1f2f2c; }
+.event-item span, .event-item p { color: #64748b; margin: 0; font-size: 13px; }
 .empty { padding: 18px; background: #f8fafc; border-radius: 8px; color: #64748b; }
+
 @media (max-width: 1200px) {
   .dashboard-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .center-grid, .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
