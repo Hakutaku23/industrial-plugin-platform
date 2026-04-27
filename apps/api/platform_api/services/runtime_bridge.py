@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -47,11 +48,11 @@ class RustRunnerBridge:
                 'callable': callable_name,
             },
             runtime={
-                'timeout_sec': timeout_sec,
+                'timeout_sec': int(timeout_sec),
                 'memory_mb': memory_mb,
                 'cpu_limit': cpu_limit,
                 'working_dir': working_dir or '.',
-                'env': runtime_env,
+                'env': _stable_numeric_runtime_env(runtime_env),
                 'filesystem_mode': capabilities.get('filesystem', 'scoped'),
                 'network_enabled': bool(capabilities.get('network', settings.runner.allow_network_default)),
                 'subprocess_enabled': bool(capabilities.get('subprocess', settings.runner.allow_subprocess_default)),
@@ -75,6 +76,7 @@ class RustRunnerBridge:
             },
             payload=payload,
         )
+
         completed = subprocess.run(
             [str(self.binary_path), 'execute-task'],
             input=json.dumps(request.__dict__, ensure_ascii=False),
@@ -83,6 +85,7 @@ class RustRunnerBridge:
             timeout=max(5, int(timeout_sec) + 5),
             check=False,
             cwd=str(settings.project_root),
+            env=self._runner_env(),
         )
         raw_stdout = completed.stdout.strip()
         if not raw_stdout:
@@ -91,6 +94,7 @@ class RustRunnerBridge:
             parsed = json.loads(raw_stdout)
         except json.JSONDecodeError as exc:
             raise RustRunnerBridgeError(f'Rust runner stdout is not valid JSON: {raw_stdout[-1000:]}') from exc
+
         result = ExecuteTaskResultModel(
             raw=parsed,
             status=str(parsed.get('status', 'infra_error')),
@@ -118,6 +122,24 @@ class RustRunnerBridge:
             raw_status=result.status,
         )
 
+    def _runner_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        if settings.runner.python_executable:
+            env['IPP_PLUGIN_PYTHON'] = str(settings.runner.python_executable)
+
+        runner_root = (settings.project_root / 'apps/runner').resolve()
+        api_root = (settings.project_root / 'apps/api').resolve()
+        pythonpath_parts = [str(runner_root), str(api_root)]
+        existing_pythonpath = env.get('PYTHONPATH')
+        if existing_pythonpath:
+            pythonpath_parts.append(existing_pythonpath)
+        env['PYTHONPATH'] = os.pathsep.join(pythonpath_parts)
+
+        function_host_path = runner_root / 'platform_runner' / 'function_host.py'
+        if function_host_path.exists():
+            env['IPP_FUNCTION_HOST_PATH'] = str(function_host_path)
+        return env
+
     def _resolve_binary(self, binary_path: str | Path | None) -> Path:
         configured = binary_path or settings.runner.binary_path
         if configured:
@@ -129,3 +151,24 @@ class RustRunnerBridge:
         if not candidate.exists():
             raise RustRunnerBinaryNotFound(f'Rust runner binary not found: {candidate}')
         return candidate
+
+
+def _stable_numeric_runtime_env(runtime_env: dict[str, str] | None) -> dict[str, str]:
+    """Merge manifest env with safe single-thread defaults for BLAS/OpenMP libraries."""
+    stable_defaults = {
+        'OPENBLAS_NUM_THREADS': '1',
+        'OMP_NUM_THREADS': '1',
+        'MKL_NUM_THREADS': '1',
+        'NUMEXPR_NUM_THREADS': '1',
+        'VECLIB_MAXIMUM_THREADS': '1',
+        'BLIS_NUM_THREADS': '1',
+        'JOBLIB_MULTIPROCESSING': '0',
+        'SKLEARN_ALLOW_INVALID_OPENMP': '1',
+    }
+    merged: dict[str, str] = dict(stable_defaults)
+    for key, value in dict(runtime_env or {}).items():
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        merged[key_text] = str(value)
+    return merged

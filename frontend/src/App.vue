@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue' // 新增 onMounted, onUnmounted
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter, RouterLink, RouterView } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 
@@ -17,56 +17,48 @@ async function signOut() {
   }
 }
 
-// ========== 新增：屏幕自适应逻辑 ==========
-// 你的屏幕是 1920，以此为基准。在 1920 下 1rem = 16px
-const designWidth = 1920; 
-const baseFontSize = 16; 
+const designWidth = 1920
+const baseFontSize = 16
 
 const setRem = () => {
-  // 获取当前屏幕的宽度
-  const clientWidth = document.documentElement.clientWidth || window.innerWidth;
-  // 计算缩放比例 (比如 4K屏 3840/1920 = 2)
-  const scale = clientWidth / designWidth;
-  // 设置 HTML 根字体大小 (限制最小缩放到0.75倍即12px，防止缩太小糊成一团)
-  const fontSize = Math.max(baseFontSize * scale, 12);
-  document.documentElement.style.fontSize = fontSize + 'px';
-};
+  const clientWidth = document.documentElement.clientWidth || window.innerWidth
+  const scale = clientWidth / designWidth
+  const fontSize = Math.max(baseFontSize * scale, 12)
+  document.documentElement.style.fontSize = fontSize + 'px'
+}
 
 onMounted(() => {
-  setRem(); // 初始化执行一次
-  window.addEventListener('resize', setRem); // 监听窗口变化
-});
+  setRem()
+  window.addEventListener('resize', setRem)
+})
 
 onUnmounted(() => {
-  window.removeEventListener('resize', setRem); // 销毁时移除监听
-});
-// ==========================================
+  window.removeEventListener('resize', setRem)
+})
 </script>
 
 <template>
   <div class="fui-shell">
     <header class="fui-topbar">
-      <!-- 左侧导航区 -->
       <nav v-if="!showLoginPage" class="fui-nav-menu">
         <RouterLink v-if="can('package.read')" to="/">首页</RouterLink>
         <RouterLink v-if="can('package.read')" to="/packages/upload">插件上传</RouterLink>
         <RouterLink v-if="can('package.read')" to="/packages">插件管理</RouterLink>
+        <RouterLink v-if="can('package.read')" to="/models">模型管理</RouterLink>
         <RouterLink v-if="can('datasource.read')" to="/data-sources">数据源管理</RouterLink>
         <RouterLink v-if="can('instance.read')" to="/instances">实例管理</RouterLink>
+        <RouterLink v-if="can('instance.read')" to="/instances/model-binding">模型绑定</RouterLink>
         <RouterLink v-if="can('run.read')" to="/runs">运行记录</RouterLink>
         <RouterLink v-if="can('system.read')" to="/license">许可证管理</RouterLink>
         <RouterLink v-if="can('user.read')" to="/admin/users">用户管理</RouterLink>
       </nav>
-      <!-- 【修改1】：在登录页时提供一个空的占位 div，确保 grid 布局的三等分不被破坏，让标题完美居中 -->
       <div v-else></div>
 
-      <!-- 中间品牌区 -->
       <div class="fui-brand">
         <h1 class="fui-sys-title">工业智能算法运行与管控平台</h1>
         <p class="fui-eyebrow">INDUSTRIAL ALGORITHM OPERATIONS CENTER</p>
       </div>
 
-      <!-- 右侧用户区 -->
       <div class="fui-user-block">
         <template v-if="auth.securityEnabled && auth.user">
           <RouterLink class="fui-profile" to="/profile">
@@ -83,7 +75,6 @@ onUnmounted(() => {
             退出 ⏻
           </button>
         </template>
-        <!-- 【修改2】：加上 !showLoginPage，如果在登录页，就隐藏右上角的登录按钮 -->
         <RouterLink v-else-if="auth.securityEnabled && !showLoginPage" class="fui-btn-login" to="/login">
           登录
         </RouterLink>
@@ -91,18 +82,18 @@ onUnmounted(() => {
     </header>
 
     <main class="fui-main-content">
-      <router-view />
+      <RouterView />
     </main>
   </div>
 </template>
+
 <style>
-/* 全局深色底色，防止滚动时出现白边 */
 body {
   margin: 0;
   background-color: #030a16;
   color: #a0cfff;
   font-family: "DingTalk JinBuTi", "Microsoft YaHei", sans-serif;
-  overflow-x: auto; /* 确保窄屏时出现滚动条，避免内容挤压重叠 */
+  overflow-x: auto;
 }
 </style>
 
@@ -111,8 +102,8 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  min-width: 780px; /* 防止顶部元素重叠的最小宽度，可根据实际内容调整 */
-  background-image: 
+  min-width: 780px;
+  background-image:
     radial-gradient(circle at 50% 0%, #002244 0%, transparent 50%),
     linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
@@ -121,12 +112,10 @@ body {
 
 .fui-topbar {
   position: relative;
-  /* 修改：移除固定高度，改为最小高度 + 自动撑开，使顶部栏高度随导航菜单换行自适应 */
   min-height: 90px;
   height: auto;
   background: url('data:image/svg+xml;utf8,<svg preserveAspectRatio="none" viewBox="0 0 1920 80" xmlns="http://www.w3.org/2000/svg"><path d="M0,0 L1920,0 L1920,50 L1450,50 L1400,80 L520,80 L470,50 L0,50 Z" fill="rgba(2, 18, 38, 0.9)" stroke="%23005f8f" stroke-width="2"/></svg>') no-repeat center top;
   background-size: 100% 100%;
-  /* 使用grid布局，确保三个区域完全分离，中间标题绝对居中 */
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
@@ -135,14 +124,13 @@ body {
   z-index: 1000;
 }
 
-/* 左侧导航区 - 下移微调，避免与背景折线视觉冲突 */
 .fui-nav-menu {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;      /* 允许折行以防万一 */
-  margin-top: 6px;     /* 向下移动，避免与标题区域干涉，也符合背景裁切美感 */
+  flex-wrap: wrap;
+  margin-top: 6px;
   margin-bottom: 15px;
-  justify-self: start;  /* 左对齐 */
+  justify-self: start;
 }
 
 .fui-nav-menu a {
@@ -154,7 +142,7 @@ body {
   border: 1px solid transparent;
   transition: all 0.3s;
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
-  white-space: nowrap;  /* 避免文字换行导致高度突变，若屏幕过窄会触发父级滚动 */
+  white-space: nowrap;
 }
 
 .fui-nav-menu a:hover,
@@ -165,11 +153,9 @@ body {
   box-shadow: inset 0 0 10px rgba(0, 243, 255, 0.3);
 }
 
-/* 品牌区 - 自然居中，不再绝对定位 */
 .fui-brand {
   text-align: center;
   pointer-events: none;
-  /* 保留最小宽度，避免内容挤压时过度换行 */
   min-width: 240px;
 }
 
@@ -180,7 +166,7 @@ body {
   color: #00f3ff;
   text-shadow: 0 0 15px rgba(0, 243, 255, 0.7);
   letter-spacing: 3px;
-  white-space: nowrap;  /* 标题不换行，窄屏出现滚动条时保持可读 */
+  white-space: nowrap;
 }
 
 .fui-eyebrow {
@@ -192,13 +178,12 @@ body {
   white-space: nowrap;
 }
 
-/* 右侧用户区 - 右对齐 */
 .fui-user-block {
   display: flex;
   align-items: center;
   gap: 20px;
-  justify-self: end;    /* grid内右对齐 */
-  margin-top: 6px;      /* 轻微下移，与导航视觉平衡 */
+  justify-self: end;
+  margin-top: 6px;
   margin-bottom: 15px;
 }
 
@@ -212,9 +197,7 @@ body {
   border-radius: 8px;
   transition: background 0.3s;
 }
-.fui-profile:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
+.fui-profile:hover { background: rgba(255, 255, 255, 0.05); }
 
 .fui-avatar-box {
   width: 36px;
@@ -245,11 +228,7 @@ body {
   transition: 0.3s;
   clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
 }
-.fui-btn-logout:hover {
-  background: #ff4444;
-  color: #fff;
-  box-shadow: 0 0 15px rgba(255, 68, 68, 0.5);
-}
+.fui-btn-logout:hover { background: #ff4444; color: #fff; box-shadow: 0 0 15px rgba(255, 68, 68, 0.5); }
 
 .fui-btn-login {
   background: rgba(0, 243, 255, 0.1);
@@ -261,38 +240,20 @@ body {
   clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
   transition: 0.3s;
 }
-.fui-btn-login:hover {
-  background: #00f3ff;
-  color: #030a16;
-  box-shadow: 0 0 20px rgba(0, 243, 255, 0.5);
-}
+.fui-btn-login:hover { background: #00f3ff; color: #030a16; box-shadow: 0 0 20px rgba(0, 243, 255, 0.5); }
 
 .fui-main-content {
   flex: 1;
   padding: 24px;
-
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
 }
 
-/* 响应式微调：当窗口宽度略低于最小宽度时，依赖全局滚动条，布局依然稳定 */
 @media (max-width: 880px) {
-  .fui-sys-title {
-    font-size: 20px;
-    letter-spacing: 1px;
-  }
-  .fui-eyebrow {
-    font-size: 8px;
-    letter-spacing: 0.1em;
-  }
-  .fui-nav-menu a {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-  .fui-topbar {
-    gap: 12px;
-    padding: 0 16px;
-  }
+  .fui-sys-title { font-size: 20px; letter-spacing: 1px; }
+  .fui-eyebrow { font-size: 8px; letter-spacing: 0.1em; }
+  .fui-nav-menu a { padding: 4px 10px; font-size: 12px; }
+  .fui-topbar { gap: 12px; padding: 0 16px; }
 }
 </style>

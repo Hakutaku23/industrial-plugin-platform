@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { uploadPackage, type UploadPackageResult } from '../api/packages'
 
 const selectedFile = ref<File | null>(null)
@@ -8,6 +8,16 @@ const isDragging = ref(false)
 const uploadProgress = ref(0)
 const result = ref<UploadPackageResult | null>(null)
 const error = ref('')
+
+const assetLabel = computed(() => {
+  if (!result.value) return ''
+  return result.value.asset_type === 'model' ? '模型工件' : '插件包'
+})
+
+const resultNameLabel = computed(() => {
+  if (!result.value) return '名称'
+  return result.value.asset_type === 'model' ? '模型名称' : '插件名称'
+})
 
 function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement
@@ -63,14 +73,27 @@ async function submit() {
 
       <div class="intro">
         <div class="header-content">
-          <p class="eyebrow">PLUG-IN DEPLOYMENT</p>
-          <h2 class="page-title">插件上传与部署</h2>
-          <p class="page-desc">支持 .zip / .tar.gz。包根目录需包含 manifest.yaml 校验文件。</p>
+          <p class="eyebrow">ARTIFACT INTAKE</p>
+          <h2 class="page-title">统一上传与归档</h2>
+          <p class="page-desc">
+            支持插件包与模型工件包。平台根据 manifest.yaml 自动识别并归档，不在前端手工创建模型。
+          </p>
         </div>
         <a class="cyber-button-outline" href="/api/v1/templates/python-function-package.zip">
           <svg viewBox="0 0 24 24" class="icon-sm"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-          获取开发模板
+          获取插件模板
         </a>
+      </div>
+
+      <div class="manifest-rules">
+        <div>
+          <strong>插件包</strong>
+          <span>apiVersion: plugin.platform/v1 · kind: PluginPackage</span>
+        </div>
+        <div>
+          <strong>模型包</strong>
+          <span>schema: ipp-model/v1 · model/artifacts 由 YAML 声明</span>
+        </div>
       </div>
 
       <form class="upload-form" @submit.prevent="submit">
@@ -82,13 +105,13 @@ async function submit() {
           @drop.prevent="onDrop"
         >
           <input type="file" accept=".zip,.gz,.tar.gz" @change="onFileChange" class="hidden-input" :disabled="uploading" />
-          
+
           <div v-if="!selectedFile" class="placeholder-content">
             <div class="upload-icon-glow">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4M12 4l-4 4m4-4l4 4M4 20h16"/></svg>
             </div>
             <span class="main-text">点击或将文件拖拽至此处</span>
-            <span class="sub-text">MAX_SIZE: 50MB</span>
+            <span class="sub-text">PLUGIN / MODEL ARTIFACT PACKAGE · MAX_SIZE: 50MB</span>
           </div>
 
           <div v-else class="file-preview">
@@ -101,7 +124,7 @@ async function submit() {
               <span v-if="!uploading" class="reselect">重新选择</span>
             </div>
           </div>
-          
+
           <div class="progress-track" :class="{ 'active': uploading }">
             <div class="progress-fill" :style="{ width: uploadProgress + '%' }"></div>
           </div>
@@ -109,7 +132,7 @@ async function submit() {
 
         <div class="action-row">
           <button type="submit" class="cyber-submit-btn" :disabled="uploading || !selectedFile">
-            {{ uploading ? '正在部署任务...' : '执行部署任务' }}
+            {{ uploading ? '正在解析并归档...' : '上传并自动归档' }}
           </button>
         </div>
       </form>
@@ -119,38 +142,50 @@ async function submit() {
       </div>
 
       <div v-if="result" class="result-section">
-        <div class="section-tag">部署报告 (DEPLOY_LOG)</div>
+        <div class="section-tag">归档报告 (ARTIFACT_LOG)</div>
         <div class="cyber-grid">
           <div class="grid-item">
-            <label>插件名称</label>
-            <span class="val highlight">{{ result.name }}</span>
+            <label>资产类型</label>
+            <span class="val highlight">{{ assetLabel }}</span>
           </div>
           <div class="grid-item">
             <label>运行状态</label>
-            <span class="val status-online">ONLINE</span>
+            <span class="val status-online">{{ result.status }}</span>
+          </div>
+          <div class="grid-item">
+            <label>{{ resultNameLabel }}</label>
+            <span class="val highlight">{{ result.name }}</span>
           </div>
           <div class="grid-item">
             <label>版本号</label>
             <span class="val badge">{{ result.version }}</span>
           </div>
-          <div class="grid-item">
-            <label>包 ID</label>
+          <div v-if="result.asset_type === 'plugin'" class="grid-item">
+            <label>插件包 ID</label>
             <span class="val code">{{ result.package_id }}</span>
+          </div>
+          <div v-if="result.asset_type === 'model'" class="grid-item">
+            <label>模型 ID</label>
+            <span class="val code">{{ result.model_id }}</span>
+          </div>
+          <div class="grid-item">
+            <label>版本 ID</label>
+            <span class="val code">{{ result.version_id }}</span>
           </div>
           <div class="grid-item full">
             <label>SHA256 摘要</label>
             <span class="val code truncate">{{ result.digest }}</span>
           </div>
         </div>
+        <p v-if="result.asset_type === 'model'" class="result-hint">
+          模型已根据 manifest.yaml 自动登记，可在“模型管理”中校验、上线、回滚和查看 artifacts。
+        </p>
       </div>
     </section>
   </div>
 </template>
 
 <style scoped>
-/* 核心变量：必须挂在组件真实根节点上。
-   Vue SFC 默认不是 Web Component，:host 不会匹配，变量会失效，
-   进而导致上传后的区域退回为浏览器/全局样式的白底黑字。 */
 .cyber-container {
   --cyan: #00f2ff;
   --bg-deep: #010a12;
@@ -184,7 +219,6 @@ async function submit() {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
 
-/* 装饰角标 */
 [class^="corner-"] {
   position: absolute;
   width: 15px;
@@ -196,11 +230,10 @@ async function submit() {
 .corner-bl { bottom: -2px; left: -2px; border-right: 0; border-top: 0; }
 .corner-br { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
 
-/* 头部 */
-.intro { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
+.intro { display: flex; justify-content: space-between; align-items: center; margin-bottom: 26px; gap: 20px; }
 .eyebrow { font-size: 11px; letter-spacing: 3px; color: var(--cyan); margin: 0; }
 .page-title { font-size: 28px; font-weight: 600; margin: 5px 0; color: #fff; }
-.page-desc { font-size: 13px; color: var(--text-dim); }
+.page-desc { font-size: 13px; color: var(--text-dim); margin: 0; line-height: 1.7; }
 
 .cyber-button-outline {
   border: 1px solid var(--cyan);
@@ -213,10 +246,34 @@ async function submit() {
   gap: 10px;
   background: rgba(0, 242, 255, 0.05);
   transition: 0.3s;
+  white-space: nowrap;
 }
 .cyber-button-outline:hover { background: rgba(0, 242, 255, 0.2); box-shadow: 0 0 15px rgba(0, 242, 255, 0.2); }
+.icon-sm { width: 16px; height: 16px; }
 
-/* 上传区：显式覆盖可能存在的全局 form/card 样式，避免选中文件后出现白底黑字 */
+.manifest-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: rgba(0, 242, 255, 0.22);
+  border: 1px solid rgba(0, 242, 255, 0.22);
+  margin-bottom: 28px;
+}
+.manifest-rules div {
+  background: rgba(1, 10, 18, 0.82);
+  padding: 14px 16px;
+}
+.manifest-rules strong {
+  display: block;
+  color: #fff;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.manifest-rules span {
+  color: rgba(160, 207, 255, 0.84);
+  font-size: 12px;
+}
+
 .upload-form {
   margin: 0;
   padding: 0;
@@ -244,8 +301,7 @@ async function submit() {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    linear-gradient(90deg, transparent 0, rgba(0, 242, 255, 0.08) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0, rgba(0, 242, 255, 0.08) 50%, transparent 100%);
   opacity: 0.25;
 }
 .upload-zone.is-dragging {
@@ -263,13 +319,7 @@ async function submit() {
 .main-text { display: block; font-size: 16px; color: #fff; margin-bottom: 10px; }
 .sub-text { font-size: 12px; color: var(--text-dim); font-family: monospace; }
 
-.file-preview {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-}
-
-/* 文件卡片 */
+.file-preview { position: relative; z-index: 1; width: 100%; }
 .file-card {
   display: flex;
   align-items: center;
@@ -316,12 +366,10 @@ async function submit() {
   text-decoration: underline;
 }
 
-/* 进度条 */
 .progress-track { position: absolute; bottom: 0; left: 0; width: 100%; height: 3px; background: rgba(255, 255, 255, 0.1); display: none; }
 .progress-track.active { display: block; }
 .progress-fill { height: 100%; background: var(--cyan); box-shadow: 0 0 15px var(--cyan); transition: width 0.3s; }
 
-/* 按钮 */
 .action-row { margin-top: 30px; display: flex; justify-content: flex-end; }
 .cyber-submit-btn {
   background: var(--cyan);
@@ -336,10 +384,8 @@ async function submit() {
 .cyber-submit-btn:disabled { background: #1a2a35; color: #444; clip-path: none; cursor: not-allowed; }
 .cyber-submit-btn:hover:not(:disabled) { filter: brightness(1.2); box-shadow: 0 0 30px rgba(0, 242, 255, 0.4); }
 
-/* 结果网格：完全对齐主页面样式 */
 .result-section { margin-top: 50px; border-top: 1px solid var(--border-cyan); padding-top: 30px; }
 .section-tag { font-size: 12px; color: var(--cyan); margin-bottom: 20px; letter-spacing: 2px; }
-
 .cyber-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -362,6 +408,12 @@ async function submit() {
 .grid-item .val.status-online::before { content: '●'; margin-right: 8px; }
 .grid-item .val.badge { background: rgba(0, 242, 255, 0.1); border: 1px solid var(--cyan); padding: 2px 8px; font-size: 12px; width: fit-content; }
 
+.result-hint {
+  margin: 18px 0 0;
+  color: rgba(160, 207, 255, 0.86);
+  font-size: 13px;
+}
+
 .error-banner { margin-top: 25px; color: #ff4d4d; border: 1px solid rgba(255, 77, 77, 0.3); padding: 12px; background: rgba(255, 77, 77, 0.05); font-family: monospace; font-size: 13px; }
 .blink { animation: blink 1s infinite; font-weight: bold; margin-right: 10px; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -372,6 +424,7 @@ async function submit() {
   .cyber-container { padding: 32px 14px; }
   .panel { padding: 26px 18px; }
   .intro { flex-direction: column; align-items: flex-start; gap: 18px; }
+  .manifest-rules { grid-template-columns: 1fr; }
   .upload-zone { padding: 38px 20px; }
   .file-card { gap: 12px; }
   .reselect { margin-left: 0; }
@@ -380,5 +433,4 @@ async function submit() {
   .cyber-grid { grid-template-columns: 1fr; }
   .grid-item.full { grid-column: span 1; }
 }
-
 </style>

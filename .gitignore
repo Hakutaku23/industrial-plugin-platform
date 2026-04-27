@@ -28,8 +28,9 @@ CHANGED_FILES.md
 USAGE.md
 issuer_keys/
 license-fingerprint.*
-license.*
+license.lic
 !license.ts
+!license.py
 scripts/*
 docs/*
 !docs/README.md
@@ -37,3 +38,4 @@ docs/*
 tools/
 *.bak
 patches/*
+runtime-*

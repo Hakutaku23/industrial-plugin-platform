@@ -6,8 +6,10 @@ import DataSources from '../views/DataSources.vue'
 // import HomeCenter from '../views/HomeCenter old.vue'
 import HomeCenter from '../views/HomeCenter.vue'
 import Instances from '../views/Instances.vue'
+import InstanceModelBinding from '../views/InstanceModelBinding.vue'
 import LicenseCenter from '../views/LicenseCenter.vue'
 import Login from '../views/Login.vue'
+import ModelRegistry from '../views/ModelRegistry.vue'
 import PluginList from '../views/PluginList.vue'
 import PluginUpload from '../views/PluginUpload.vue'
 import RunList from '../views/RunList.vue'
@@ -22,7 +24,9 @@ export const router = createRouter({
     { path: '/home', redirect: '/' },
     { path: '/packages/upload', name: 'plugin-upload', component: PluginUpload, meta: { permission: 'package.read' } },
     { path: '/packages', name: 'plugin-list', component: PluginList, meta: { permission: 'package.read' } },
+    { path: '/models', name: 'model-registry', component: ModelRegistry, meta: { permission: 'package.read' } },
     { path: '/data-sources', name: 'data-sources', component: DataSources, meta: { permission: 'datasource.read' } },
+    { path: '/instances/model-binding', name: 'instance-model-binding', component: InstanceModelBinding, meta: { permission: 'instance.read' } },
     { path: '/instances', name: 'instances', component: Instances, meta: { permission: 'instance.read' } },
     { path: '/runs', name: 'run-list', component: RunList, meta: { permission: 'run.read' } },
     // { path: '/system/observability', name: 'system-observability', component: SystemObservability, meta: { permission: 'system.read' } },

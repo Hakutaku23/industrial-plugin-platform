@@ -18,6 +18,7 @@ from platform_api.services.license_guard import (
 )
 from platform_api.services.manifest import PluginManifest
 from platform_api.services.metadata_store import MetadataStore, PluginInstanceModel
+from platform_api.services.model_runtime import ModelRuntimeError, ModelRuntimePreparation, prepare_instance_model_runtime
 from platform_api.services.runtime_bridge import RustRunnerBridge
 from platform_api.services.runtime_errors import RustRunnerBinaryNotFound, RustRunnerBridgeError
 from platform_api.services.runtime_protocol import RustRunnerResult
@@ -71,13 +72,6 @@ def execute_plugin_version(
     if execution_context:
         context.update(dict(execution_context))
 
-    payload = {
-        "context": context,
-        "inputs": inputs,
-        "config": config,
-        "capabilities": manifest.spec.permissions.model_dump(),
-    }
-
     outputs: dict[str, Any] = {}
     metrics: dict[str, Any] = {}
     logs: list[dict[str, str]] = [{"source": "runner", "level": "INFO", "message": "run started"}]
@@ -85,13 +79,31 @@ def execute_plugin_version(
     status = "FAILED"
 
     package_dir = _resolve_package_path(str(version_record["package_path"]))
+    model_runtime: ModelRuntimePreparation | None = None
+    runtime_env = dict(manifest.spec.runtime.env)
+
     try:
+        if instance_id is not None:
+            model_runtime = prepare_instance_model_runtime(instance_id=instance_id, run_id=run_id)
+            if model_runtime is not None:
+                context["model"] = model_runtime.context
+                runtime_env.update(model_runtime.env)
+                logs.append({"source": "runner", "level": "INFO", "message": "bound model materialized"})
+
+        payload = {
+            "context": context,
+            "inputs": inputs,
+            "config": config,
+            "capabilities": manifest.spec.permissions.model_dump(),
+        }
+
         runner_result = _execute_via_runtime_bridge(
             package_dir=package_dir,
             manifest=manifest,
             payload=payload,
             trigger_type=trigger_type,
             run_id=run_id,
+            runtime_env=runtime_env,
         )
         outputs = runner_result.outputs
         metrics = _build_runtime_metrics(
@@ -101,6 +113,8 @@ def execute_plugin_version(
             fallback_started_at=started_at,
             fallback_finished_at=datetime.now(UTC),
         )
+        if model_runtime is not None:
+            metrics.update(model_runtime.metrics)
         logs.append({"source": "runner", "level": "INFO", "message": f"executor backend: {metrics.get('executor_backend')}"})
         logs.extend({"source": "plugin", "level": "INFO", "message": message} for message in runner_result.logs)
         if runner_result.stderr:
@@ -112,11 +126,15 @@ def execute_plugin_version(
         status = "TIMED_OUT"
         error = {"code": "E_TIMEOUT", "message": str(exc)}
         metrics = {'executor_backend': 'timeout', 'scheduler_backend': _scheduler_backend_for_trigger(trigger_type)}
+        if model_runtime is not None:
+            metrics.update(model_runtime.metrics)
         logs.append({"source": "runner", "level": "ERROR", "message": "plugin execution timed out"})
-    except (RunnerExecutionError, RustRunnerBridgeError, LicenseGuardError) as exc:
+    except (RunnerExecutionError, RustRunnerBridgeError, LicenseGuardError, ModelRuntimeError) as exc:
         status = "FAILED"
         error = {"code": "E_RUNTIME_FAILED", "message": str(exc)}
         metrics = {'executor_backend': 'runtime_error', 'scheduler_backend': _scheduler_backend_for_trigger(trigger_type)}
+        if model_runtime is not None:
+            metrics.update(model_runtime.metrics)
         logs.append({"source": "runner", "level": "ERROR", "message": str(exc)})
 
     finished_at = datetime.now(UTC)
@@ -235,7 +253,8 @@ def resolve_instance_lock_ttl_sec(*, instance_id: int, store: MetadataStore | No
     return max(ttl_sec, timeout_sec + 30)
 
 
-def _execute_via_runtime_bridge(*, package_dir: Path, manifest: PluginManifest, payload: dict[str, Any], trigger_type: str, run_id: str) -> RustRunnerResult:
+def _execute_via_runtime_bridge(*, package_dir: Path, manifest: PluginManifest, payload: dict[str, Any], trigger_type: str, run_id: str, runtime_env: dict[str, str] | None = None) -> RustRunnerResult:
+    effective_env = dict(runtime_env or {})
     try:
         bridge = RustRunnerBridge()
         return bridge.execute_function(
@@ -247,7 +266,7 @@ def _execute_via_runtime_bridge(*, package_dir: Path, manifest: PluginManifest, 
             memory_mb=manifest.spec.runtime.memory_mb,
             cpu_limit=manifest.spec.runtime.cpu_limit,
             working_dir=manifest.spec.runtime.working_dir or '.',
-            runtime_env=dict(manifest.spec.runtime.env),
+            runtime_env=effective_env,
             capabilities=manifest.spec.permissions.model_dump(),
             task_id=run_id,
             run_id=run_id,

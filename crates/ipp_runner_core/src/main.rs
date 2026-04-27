@@ -4,10 +4,6 @@ use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -78,6 +74,10 @@ struct SandboxSpec {
     cleanup_stale_incomplete_age_sec: Option<u64>,
     cleanup_sweep_interval_sec: Option<u64>,
     cleanup_state_file: Option<String>,
+    max_stdout_bytes: Option<usize>,
+    max_stderr_bytes: Option<usize>,
+    max_output_json_bytes: Option<usize>,
+    max_workdir_total_bytes: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,24 +123,16 @@ struct ErrorPayload {
     message: String,
 }
 
-#[derive(Debug)]
-struct RunDirEntry {
-    path: PathBuf,
-    modified_epoch_sec: u64,
-    has_result: bool,
-}
-
 fn main() {
-    let result = run();
-    match result {
+    let started_at = iso_now();
+    let started_instant = Instant::now();
+    match run() {
         Ok(output) => {
-            println!(
-                "{}",
-                serde_json::to_string(&output).expect("serialize runner result")
-            );
+            println!("{}", serde_json::to_string(&output).expect("serialize runner result"));
             std::process::exit(0);
         }
         Err(err) => {
+            let finished_at = iso_now();
             let fallback = ExecuteTaskResult {
                 schema_version: "runner-result/v2".to_string(),
                 task_id: "unknown".to_string(),
@@ -148,9 +140,9 @@ fn main() {
                 status: "infra_error".to_string(),
                 exit_code: -1,
                 timing: Timing {
-                    started_at: iso_now(),
-                    finished_at: iso_now(),
-                    wall_time_ms: 0,
+                    started_at,
+                    finished_at,
+                    wall_time_ms: started_instant.elapsed().as_millis(),
                 },
                 resource_usage: ResourceUsage {
                     peak_rss_mb: 0,
@@ -165,10 +157,7 @@ fn main() {
                     message: err.to_string(),
                 },
             };
-            println!(
-                "{}",
-                serde_json::to_string(&fallback).expect("serialize fallback result")
-            );
+            println!("{}", serde_json::to_string(&fallback).expect("serialize fallback result"));
             std::process::exit(1);
         }
     }
@@ -184,23 +173,20 @@ fn run() -> Result<ExecuteTaskResult> {
 fn execute_task() -> Result<ExecuteTaskResult> {
     let request: ExecuteTaskRequest = serde_json::from_reader(std::io::stdin())
         .context("failed to parse ExecuteTaskRequest from stdin")?;
+    validate_request(&request)?;
 
     let started_at = iso_now();
     let started_instant = Instant::now();
 
-    validate_request(&request)?;
-
     let task_work_dir = PathBuf::from(&request.sandbox.task_work_dir);
-    maybe_cleanup_work_root(&request, &task_work_dir)?;
     fs::create_dir_all(&task_work_dir).with_context(|| {
-        format!(
-            "failed to create task work directory: {}",
-            task_work_dir.display()
-        )
+        format!("failed to create task work directory: {}", task_work_dir.display())
     })?;
 
     let input_path = task_work_dir.join(&request.sandbox.input_file);
     let result_path = task_work_dir.join(&request.sandbox.result_file);
+    let stdout_path = task_work_dir.join("stdout.log");
+    let stderr_path = task_work_dir.join("stderr.log");
 
     let mut input_file = File::create(&input_path)
         .with_context(|| format!("failed to create input file: {}", input_path.display()))?;
@@ -212,23 +198,33 @@ fn execute_task() -> Result<ExecuteTaskResult> {
 
     let package_dir = PathBuf::from(&request.plugin.package_dir);
     let working_dir = resolve_working_dir(&package_dir, request.runtime.working_dir.as_deref());
-
     let python_exe = std::env::var("IPP_PLUGIN_PYTHON")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "python".to_string());
 
+    let stdout_file = File::create(&stdout_path)
+        .with_context(|| format!("failed to create stdout log: {}", stdout_path.display()))?;
+    let stderr_file = File::create(&stderr_path)
+        .with_context(|| format!("failed to create stderr log: {}", stderr_path.display()))?;
+
     let mut command = Command::new(&python_exe);
+    if let Some(function_host_path) = std::env::var("IPP_FUNCTION_HOST_PATH")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        command.arg(function_host_path);
+    } else {
+        command.arg("-m").arg("platform_runner.function_host");
+    }
     command
-        .arg("-m")
-        .arg("platform_runner.function_host")
         .arg(package_dir.to_string_lossy().to_string())
         .arg(&request.plugin.entry_file)
         .arg(&request.plugin.callable)
         .current_dir(&working_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
 
     command.env("IPP_INPUT_FILE", input_path.to_string_lossy().to_string());
     command.env("IPP_RESULT_FILE", result_path.to_string_lossy().to_string());
@@ -260,50 +256,13 @@ fn execute_task() -> Result<ExecuteTaskResult> {
     let mut child = command.spawn().context("failed to spawn plugin host")?;
     let child_pid_raw = child.id() as i32;
     let child_pid = Pid::from_raw(child_pid_raw);
-
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let peak_rss_mb = Arc::new(Mutex::new(0_u64));
-    let kill_reason = Arc::new(Mutex::new(String::from("none")));
-
-    let monitor_handle = {
-        let stop_flag = Arc::clone(&stop_flag);
-        let peak_rss_mb = Arc::clone(&peak_rss_mb);
-        let kill_reason = Arc::clone(&kill_reason);
-        let rss_limit_mb = request.runtime.memory_mb;
-        thread::spawn(move || {
-            while !stop_flag.load(Ordering::Relaxed) {
-                if let Some(rss_mb) = read_peak_rss_mb(child_pid_raw) {
-                    if let Ok(mut guard) = peak_rss_mb.lock() {
-                        if rss_mb > *guard {
-                            *guard = rss_mb;
-                        }
-                    }
-                    if let Some(limit_mb) = rss_limit_mb {
-                        if rss_mb > limit_mb {
-                            if let Ok(mut reason) = kill_reason.lock() {
-                                if reason.as_str() == "none" {
-                                    *reason = "memory_limit".to_string();
-                                }
-                            }
-                            let _ = killpg(child_pid, Signal::SIGKILL);
-                            break;
-                        }
-                    }
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-        })
-    };
-
     let timeout = Duration::from_secs(request.runtime.timeout_sec);
+    let mut kill_reason = String::from("none");
+
     let status = match child.wait_timeout(timeout)? {
         Some(status) => status,
         None => {
-            if let Ok(mut reason) = kill_reason.lock() {
-                if reason.as_str() == "none" {
-                    *reason = "timeout".to_string();
-                }
-            }
+            kill_reason = "timeout".to_string();
             let _ = killpg(child_pid, Signal::SIGTERM);
             thread::sleep(Duration::from_millis(300));
             let _ = killpg(child_pid, Signal::SIGKILL);
@@ -311,49 +270,35 @@ fn execute_task() -> Result<ExecuteTaskResult> {
         }
     };
 
-    let output = child
-        .wait_with_output()
-        .context("failed to collect child output")?;
-
-    stop_flag.store(true, Ordering::Relaxed);
-    let _ = monitor_handle.join();
-
     let finished_at = iso_now();
     let wall_time_ms = started_instant.elapsed().as_millis();
-    let stderr = truncate_utf8(String::from_utf8_lossy(&output.stderr).to_string(), 16 * 1024);
-    let stdout = truncate_utf8(String::from_utf8_lossy(&output.stdout).to_string(), 16 * 1024);
-
-    let plugin_result = parse_plugin_result(&result_path, &stdout)?;
+    let max_stdout = request.sandbox.max_stdout_bytes.unwrap_or(16 * 1024);
+    let max_stderr = request.sandbox.max_stderr_bytes.unwrap_or(16 * 1024);
+    let stdout = read_text_tail(&stdout_path, max_stdout).unwrap_or_default();
+    let stderr = read_text_tail(&stderr_path, max_stderr).unwrap_or_default();
     let exit_code = status.code().unwrap_or(-1);
-
-    let kill_reason_value = kill_reason
-        .lock()
-        .map(|item| item.clone())
-        .unwrap_or_else(|_| "none".to_string());
+    let plugin_result = parse_plugin_result(&result_path, &stdout);
 
     let mut final_status = if exit_code == 0 && plugin_result.status == "success" {
         "success".to_string()
-    } else if kill_reason_value == "timeout" {
+    } else if exit_code == 0 && plugin_result.status == "partial_success" {
+        "partial_success".to_string()
+    } else if kill_reason == "timeout" {
         "timeout".to_string()
     } else {
         "failed".to_string()
     };
-    if plugin_result.status == "partial_success" && final_status == "success" {
-        final_status = "partial_success".to_string();
+
+    if plugin_result.status == "failed" && exit_code == 0 {
+        final_status = "failed".to_string();
     }
 
     let error = if final_status == "success" || final_status == "partial_success" {
         ErrorPayload::default()
     } else {
         ErrorPayload {
-            code: map_error_code(&kill_reason_value, exit_code),
-            message: if kill_reason_value != "none" {
-                format!("plugin process terminated because {}", kill_reason_value)
-            } else if !stderr.is_empty() {
-                stderr.clone()
-            } else {
-                format!("plugin process exited with code {}", exit_code)
-            },
+            code: map_error_code(&kill_reason, exit_code, &plugin_result),
+            message: error_message(&kill_reason, exit_code, &stderr, &plugin_result),
         }
     };
 
@@ -369,13 +314,10 @@ fn execute_task() -> Result<ExecuteTaskResult> {
             wall_time_ms,
         },
         resource_usage: ResourceUsage {
-            peak_rss_mb: peak_rss_mb
-                .lock()
-                .map(|item| *item)
-                .unwrap_or_default(),
+            peak_rss_mb: 0,
             cpu_time_user_ms: 0,
             cpu_time_system_ms: 0,
-            kill_reason: kill_reason_value,
+            kill_reason,
         },
         plugin_result,
         stderr,
@@ -393,119 +335,6 @@ fn validate_request(request: &ExecuteTaskRequest) -> Result<()> {
     Ok(())
 }
 
-fn maybe_cleanup_work_root(request: &ExecuteTaskRequest, current_task_work_dir: &Path) -> Result<()> {
-    if !request.sandbox.cleanup_enabled.unwrap_or(true) {
-        return Ok(());
-    }
-
-    let work_root = PathBuf::from(&request.sandbox.work_root);
-    fs::create_dir_all(&work_root)?;
-
-    let sweep_interval_sec = request.sandbox.cleanup_sweep_interval_sec.unwrap_or(600).max(30);
-    let state_file_name = request
-        .sandbox
-        .cleanup_state_file
-        .clone()
-        .unwrap_or_else(|| ".runner-cleanup-state".to_string());
-    let state_path = work_root.join(state_file_name);
-    let now_epoch_sec = unix_now_sec();
-
-    if let Ok(previous) = fs::read_to_string(&state_path) {
-        if let Ok(last_cleanup_epoch_sec) = previous.trim().parse::<u64>() {
-            if now_epoch_sec.saturating_sub(last_cleanup_epoch_sec) < sweep_interval_sec {
-                return Ok(());
-            }
-        }
-    }
-
-    cleanup_run_directories(
-        &work_root,
-        current_task_work_dir,
-        &request.sandbox.result_file,
-        request.sandbox.cleanup_max_age_sec.unwrap_or(7 * 24 * 60 * 60),
-        request.sandbox.cleanup_max_run_dirs.unwrap_or(500).max(1),
-        request.sandbox.cleanup_min_keep_runs.unwrap_or(20),
-        request
-            .sandbox
-            .cleanup_stale_incomplete_age_sec
-            .unwrap_or(24 * 60 * 60),
-        now_epoch_sec,
-    )?;
-
-    let _ = fs::write(state_path, now_epoch_sec.to_string());
-    Ok(())
-}
-
-fn cleanup_run_directories(
-    work_root: &Path,
-    current_task_work_dir: &Path,
-    result_file_name: &str,
-    max_age_sec: u64,
-    max_run_dirs: usize,
-    min_keep_runs: usize,
-    stale_incomplete_age_sec: u64,
-    now_epoch_sec: u64,
-) -> Result<()> {
-    let mut entries: Vec<RunDirEntry> = Vec::new();
-    for dir_entry in fs::read_dir(work_root)? {
-        let dir_entry = match dir_entry {
-            Ok(item) => item,
-            Err(_) => continue,
-        };
-        let path = dir_entry.path();
-        if path == current_task_work_dir {
-            continue;
-        }
-        let file_type = match dir_entry.file_type() {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|item| item.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("run-") {
-            continue;
-        }
-        let modified_epoch_sec = path_modified_epoch_sec(&path).unwrap_or(0);
-        let has_result = path.join(result_file_name).exists();
-        entries.push(RunDirEntry {
-            path,
-            modified_epoch_sec,
-            has_result,
-        });
-    }
-
-    entries.sort_by(|left, right| right.modified_epoch_sec.cmp(&left.modified_epoch_sec));
-    let effective_keep_by_count = max_run_dirs.max(min_keep_runs);
-
-    for (index, entry) in entries.into_iter().enumerate() {
-        if index < min_keep_runs {
-            continue;
-        }
-        let age_sec = now_epoch_sec.saturating_sub(entry.modified_epoch_sec);
-        let over_count_limit = index >= effective_keep_by_count;
-        let aged_completed = entry.has_result && age_sec >= max_age_sec;
-        let aged_incomplete = !entry.has_result && age_sec >= stale_incomplete_age_sec;
-        if !(over_count_limit || aged_completed || aged_incomplete) {
-            continue;
-        }
-        match fs::remove_dir_all(&entry.path) {
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => {}
-        }
-    }
-    Ok(())
-}
-
-fn path_modified_epoch_sec(path: &Path) -> Option<u64> {
-    let modified = fs::metadata(path).ok()?.modified().ok()?;
-    modified.duration_since(UNIX_EPOCH).ok().map(|item| item.as_secs())
-}
-
 fn resolve_working_dir(package_dir: &Path, working_dir: Option<&str>) -> PathBuf {
     let candidate = working_dir.unwrap_or(".").trim();
     let joined = package_dir.join(candidate);
@@ -516,97 +345,110 @@ fn resolve_working_dir(package_dir: &Path, working_dir: Option<&str>) -> PathBuf
     }
 }
 
-fn parse_plugin_result(result_path: &Path, stdout: &str) -> Result<PluginResultEnvelope> {
+fn parse_plugin_result(result_path: &Path, stdout: &str) -> PluginResultEnvelope {
     let raw_text = if result_path.exists() {
-        fs::read_to_string(result_path)
-            .with_context(|| format!("failed to read result file: {}", result_path.display()))?
+        fs::read_to_string(result_path).unwrap_or_default()
     } else {
         stdout.to_string()
     };
 
     if raw_text.trim().is_empty() {
-        anyhow::bail!("plugin result is empty");
+        return PluginResultEnvelope {
+            status: "failed".to_string(),
+            ..PluginResultEnvelope::default()
+        };
     }
 
-    let raw: serde_json::Value =
-        serde_json::from_str(&raw_text).context("plugin result is not valid JSON")?;
-    let object = raw
-        .as_object()
-        .context("plugin result must be a JSON object")?;
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(&raw_text) else {
+        return PluginResultEnvelope {
+            status: "failed".to_string(),
+            ..PluginResultEnvelope::default()
+        };
+    };
+    let Some(object) = raw.as_object() else {
+        return PluginResultEnvelope {
+            status: "failed".to_string(),
+            ..PluginResultEnvelope::default()
+        };
+    };
 
     let status = object
         .get("status")
         .and_then(|item| item.as_str())
         .unwrap_or("failed")
         .to_string();
-
     let outputs = object
         .get("outputs")
         .and_then(|item| item.as_object())
         .cloned()
         .unwrap_or_default();
-
     let metrics = object
         .get("metrics")
         .and_then(|item| item.as_object())
         .cloned()
         .unwrap_or_default();
-
     let logs = object
         .get("logs")
         .and_then(|item| item.as_array())
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .map(|item| item.as_str().unwrap_or_default().to_string())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
-    Ok(PluginResultEnvelope {
+    PluginResultEnvelope {
         status,
         outputs,
         metrics,
         logs,
-    })
+    }
 }
 
-fn map_error_code(kill_reason: &str, exit_code: i32) -> String {
+fn map_error_code(kill_reason: &str, exit_code: i32, plugin_result: &PluginResultEnvelope) -> String {
     match kill_reason {
         "timeout" => "E_PROCESS_TIMEOUT".to_string(),
         "memory_limit" => "E_MEMORY_LIMIT_EXCEEDED".to_string(),
         _ if exit_code != 0 => "E_PROCESS_EXIT_NONZERO".to_string(),
+        _ if plugin_result.status != "success" => "E_PLUGIN_FAILED".to_string(),
         _ => "E_INTERNAL".to_string(),
     }
 }
 
-fn read_peak_rss_mb(pid: i32) -> Option<u64> {
-    let status_path = format!("/proc/{}/status", pid);
-    let content = fs::read_to_string(status_path).ok()?;
-    for line in content.lines() {
-        if let Some(raw) = line.strip_prefix("VmRSS:") {
-            let kb = raw
-                .split_whitespace()
-                .next()
-                .and_then(|value| value.parse::<u64>().ok())?;
-            return Some((kb + 1023) / 1024);
-        }
+fn error_message(
+    kill_reason: &str,
+    exit_code: i32,
+    stderr: &str,
+    plugin_result: &PluginResultEnvelope,
+) -> String {
+    if kill_reason != "none" {
+        return format!("plugin process terminated because {}", kill_reason);
     }
-    None
+    if !stderr.trim().is_empty() {
+        return stderr.trim().to_string();
+    }
+    if exit_code != 0 {
+        return format!("plugin process exited with code {}", exit_code);
+    }
+    if plugin_result.status != "success" {
+        return "plugin returned failed status or did not produce result.json".to_string();
+    }
+    "runner internal error".to_string()
 }
 
-fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value;
+fn read_text_tail(path: &Path, max_bytes: usize) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let start = bytes.len().saturating_sub(max_bytes);
+    let mut value = String::from_utf8_lossy(&bytes[start..]).to_string();
+    if start > 0 {
+        value = format!("...{}", value);
     }
-    value.truncate(max_bytes);
-    while !value.is_char_boundary(value.len()) {
-        value.pop();
-    }
-    value
+    Some(value)
 }
 
 fn iso_now() -> String {
-    format!("{}", unix_now_sec())
+    unix_now_sec().to_string()
 }
 
 fn unix_now_sec() -> u64 {

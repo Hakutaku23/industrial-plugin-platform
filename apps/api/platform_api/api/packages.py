@@ -9,6 +9,8 @@ from platform_api.core.config import settings
 from platform_api.security import Principal, require_permission
 from platform_api.services.execution import PluginExecutionError, execute_plugin_version
 from platform_api.services.license_guard import LicenseGuardError, ensure_manual_run_allowed, ensure_package_upload_allowed
+from platform_api.services.model_registry import ModelRegistry, ModelRegistryError
+from platform_api.services.package_intake import PackageIntakeError, detect_package_kind
 from platform_api.services.package_storage import PackageStorage, PackageStorageError
 from platform_api.services.plugin_template import build_python_function_template_archive
 
@@ -41,9 +43,49 @@ async def upload_package(
         ensure_package_upload_allowed(store=metadata_store)
     except LicenseGuardError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     content = await request.body()
     if not content:
         raise HTTPException(status_code=400, detail='package body is empty')
+
+    try:
+        intake = detect_package_kind(filename=filename, content=content)
+    except PackageIntakeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if intake.kind == 'model':
+        try:
+            uploaded = ModelRegistry().upload_package_bytes(
+                filename=filename,
+                content=content,
+                actor=principal.username,
+            )
+        except ModelRegistryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        metadata_store.record_audit_event(
+            event_type='security.model_package.uploaded',
+            target_type='model_version',
+            target_id=str(uploaded.version_id),
+            actor=principal.username,
+            details={
+                'filename': filename,
+                'model_name': uploaded.model_name,
+                'version': uploaded.version,
+                'digest': uploaded.digest,
+            },
+        )
+        return {
+            'asset_type': 'model',
+            'model_id': uploaded.model_id,
+            'version_id': uploaded.version_id,
+            'name': uploaded.model_name,
+            'model_name': uploaded.model_name,
+            'version': uploaded.version,
+            'status': uploaded.status,
+            'digest': uploaded.digest,
+            'manifest': uploaded.manifest,
+        }
 
     storage = PackageStorage(settings.package_storage_dir)
     try:
@@ -61,6 +103,7 @@ async def upload_package(
     )
 
     return {
+        'asset_type': 'plugin',
         'package_id': registration.package_id,
         'version_id': registration.version_id,
         'audit_event_id': registration.audit_event_id,

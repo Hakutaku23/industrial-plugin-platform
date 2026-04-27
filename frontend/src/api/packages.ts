@@ -1,14 +1,20 @@
 import { apiFetch } from './client'
 
+export type UploadedAssetType = 'plugin' | 'model'
+
 export interface UploadPackageResult {
-  package_id: number
+  asset_type: UploadedAssetType
+  package_id?: number
+  model_id?: number
   version_id: number
-  audit_event_id: number
+  audit_event_id?: number
   name: string
+  model_name?: string
   version: string
   status: string
   digest: string
-  package_dir: string
+  package_dir?: string
+  manifest?: Record<string, unknown>
 }
 
 export interface PluginPackageSummary {

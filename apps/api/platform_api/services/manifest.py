@@ -145,6 +145,23 @@ class CompatibilitySpec(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class ModelDependencySpec(BaseModel):
+    required: bool = True
+    family_fingerprint: str | None = Field(default=None, alias="familyFingerprint")
+    model_name: str | None = Field(default=None, alias="modelName")
+    role: str | None = None
+    required_artifacts: list[str] = Field(default_factory=list, alias="requiredArtifacts")
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    @field_validator("family_fingerprint")
+    @classmethod
+    def validate_family_fingerprint(cls, value: str | None) -> str | None:
+        if value is not None and not str(value).strip():
+            raise ValueError("modelDependency.familyFingerprint must not be empty")
+        return value
+
+
 class PluginManifest(BaseModel):
     api_version: Literal["plugin.platform/v1"] = Field(alias="apiVersion")
     kind: Literal["PluginPackage"]
@@ -152,6 +169,7 @@ class PluginManifest(BaseModel):
     spec: PluginSpec
     compatibility: CompatibilitySpec
     config_schema: dict[str, Any] | None = Field(default=None, alias="configSchema")
+    model_dependency: ModelDependencySpec | None = Field(default=None, alias="modelDependency")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -175,4 +193,3 @@ def load_manifest(path: Path) -> PluginManifest:
     if not path.exists():
         raise ManifestError(f"manifest not found: {path}")
     return parse_manifest_text(path.read_text(encoding="utf-8"))
-
