@@ -4,342 +4,381 @@ import { uploadPackage, type UploadPackageResult } from '../api/packages'
 
 const selectedFile = ref<File | null>(null)
 const uploading = ref(false)
-const uploadProgress = ref(0) // 新增：进度条状态
+const isDragging = ref(false)
+const uploadProgress = ref(0)
 const result = ref<UploadPackageResult | null>(null)
 const error = ref('')
 
 function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement
-  selectedFile.value = input.files?.[0] ?? null
-  result.value = null
-  error.value = ''
-  uploadProgress.value = 0 // 重新选择文件时重置进度
+  if (input.files?.length) handleFiles(input.files[0])
+}
+
+function onDrop(event: DragEvent) {
+  isDragging.value = false
+  const files = event.dataTransfer?.files
+  if (files?.length) handleFiles(files[0])
+}
+
+function handleFiles(file: File) {
+  const name = file.name.toLowerCase()
+  if (name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.gz')) {
+    selectedFile.value = file
+    result.value = null
+    error.value = ''
+    uploadProgress.value = 0
+  } else {
+    error.value = 'FILE_TYPE_ERROR: 只支持 .zip 或 .tar.gz 格式'
+  }
 }
 
 async function submit() {
-  if (!selectedFile.value) {
-    error.value = '请选择 zip 或 tar.gz 插件包'
-    return
-  }
-
+  if (!selectedFile.value) return
   uploading.value = true
   error.value = ''
   result.value = null
-  uploadProgress.value = 0
 
-  // 💡 体验优化：平滑模拟进度条
-  // 因为底层的 Promise 无法直接抛出进度，这里用定时器模拟平滑上传到 90%
-  // 如果未来您的 uploadPackage API 支持 onUploadProgress，可直接替换此处逻辑
   const timer = setInterval(() => {
-    if (uploadProgress.value < 90) {
-      const increment = Math.max(1, (95 - uploadProgress.value) / 10)
-      uploadProgress.value += increment
-    }
+    if (uploadProgress.value < 90) uploadProgress.value += (95 - uploadProgress.value) / 10
   }, 200)
 
   try {
     result.value = await uploadPackage(selectedFile.value)
-    uploadProgress.value = 100 // 成功后瞬间拉满
+    uploadProgress.value = 100
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '插件包上传失败'
-    uploadProgress.value = 0 // 失败归零
+    error.value = err instanceof Error ? err.message : '上传失败'
+    uploadProgress.value = 0
   } finally {
     clearInterval(timer)
-    // 稍微延迟一下关闭 uploading 状态，让用户能看清 100% 满格的动画效果
-    setTimeout(() => {
-      uploading.value = false
-    }, 400)
+    setTimeout(() => { uploading.value = false }, 400)
   }
 }
 </script>
 
 <template>
-  <section class="panel">
-    <!-- 头部介绍 -->
-    <div class="intro upload-intro">
-      <div class="header-content">
-        <p class="eyebrow">插件上传</p>
-        <h2 class="page-title">插件上传</h2>
-        <p class="page-desc">支持 .zip 与 .tar.gz。包根目录必须包含 manifest.yaml 配置。</p>
-      </div>
-      <a class="secondary-button template-download" href="/api/v1/templates/python-function-package.zip">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        下载插件模板
-      </a>
-    </div>
+  <div class="cyber-container">
+    <section class="panel">
+      <div class="corner-tl"></div><div class="corner-tr"></div>
+      <div class="corner-bl"></div><div class="corner-br"></div>
 
-    <!-- 提示栏 -->
-    <div class="template-hint">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-hint">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="12" y1="16" x2="12" y2="12"></line>
-        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-      </svg>
-      <div class="hint-text">
-        <strong>推荐入口：</strong>
-        <span>首次编写插件时，先下载模板，再替换 runtime/main.py 与编译产物。</span>
-      </div>
-    </div>
-
-    <!-- 核心表单 -->
-    <form class="upload-form" @submit.prevent="submit">
-      <label class="upload-zone" :class="{ 'has-file': selectedFile, 'is-uploading': uploading }">
-        <input type="file" accept=".zip,.gz,.tar.gz" @change="onFileChange" class="hidden-input" :disabled="uploading" />
-        
-        <!-- 未选择文件时的占位 -->
-        <div v-if="!selectedFile" class="upload-placeholder">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-upload">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-            <circle cx="8.5" cy="8.5" r="1.5"></circle>
-            <polyline points="21 15 16 10 5 21"></polyline>
-          </svg>
-          <span class="upload-text">点击选择插件压缩包</span>
-          <span class="upload-format">支持 .zip, .tar.gz (不超过系统上限)</span>
+      <div class="intro">
+        <div class="header-content">
+          <p class="eyebrow">PLUG-IN DEPLOYMENT</p>
+          <h2 class="page-title">插件上传与部署</h2>
+          <p class="page-desc">支持 .zip / .tar.gz。包根目录需包含 manifest.yaml 校验文件。</p>
         </div>
+        <a class="cyber-button-outline" href="/api/v1/templates/python-function-package.zip">
+          <svg viewBox="0 0 24 24" class="icon-sm"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          获取开发模板
+        </a>
+      </div>
 
-        <!-- 已选择文件时的展示 (包含进度条) -->
-        <div v-else class="file-selected">
-          <div class="file-info-row">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-file">
-              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-              <polyline points="13 2 13 9 20 9"></polyline>
-            </svg>
-            <div class="file-info">
-              <span class="file-name">{{ selectedFile.name }}</span>
-              <span class="file-size">{{ (selectedFile.size / 1024).toFixed(1) }} KB</span>
+      <form class="upload-form" @submit.prevent="submit">
+        <label 
+          class="upload-zone" 
+          :class="{ 'is-dragging': isDragging, 'has-file': selectedFile }"
+          @dragover.prevent="isDragging = true"
+          @dragleave.prevent="isDragging = false"
+          @drop.prevent="onDrop"
+        >
+          <input type="file" accept=".zip,.gz,.tar.gz" @change="onFileChange" class="hidden-input" :disabled="uploading" />
+          
+          <div v-if="!selectedFile" class="placeholder-content">
+            <div class="upload-icon-glow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4M12 4l-4 4m4-4l4 4M4 20h16"/></svg>
             </div>
-            <span v-if="!uploading" class="file-change-text">点击更换</span>
+            <span class="main-text">点击或将文件拖拽至此处</span>
+            <span class="sub-text">MAX_SIZE: 50MB</span>
           </div>
 
-          <!-- 进度条区域 -->
-          <div class="progress-wrapper" :class="{ 'show': uploading || uploadProgress > 0 }">
-            <div class="progress-track">
-              <div class="progress-fill" :style="{ width: uploadProgress + '%' }"></div>
-            </div>
-            <div class="progress-text" v-if="uploading">
-              校验传输中... {{ Math.round(uploadProgress) }}%
+          <div v-else class="file-preview">
+            <div class="file-card">
+              <div class="file-ext">PKG</div>
+              <div class="file-meta">
+                <span class="name">{{ selectedFile.name }}</span>
+                <span class="size">{{ (selectedFile.size / 1024).toFixed(1) }} KB</span>
+              </div>
+              <span v-if="!uploading" class="reselect">重新选择</span>
             </div>
           </div>
+          
+          <div class="progress-track" :class="{ 'active': uploading }">
+            <div class="progress-fill" :style="{ width: uploadProgress + '%' }"></div>
+          </div>
+        </label>
+
+        <div class="action-row">
+          <button type="submit" class="cyber-submit-btn" :disabled="uploading || !selectedFile">
+            {{ uploading ? '正在部署任务...' : '执行部署任务' }}
+          </button>
         </div>
-      </label>
+      </form>
 
-      <!-- 操作按钮 (优化了尺寸、位置与动效) -->
-      <div class="form-actions">
-        <button type="submit" class="primary-button" :disabled="uploading || !selectedFile">
-          <svg v-if="uploading" class="icon-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-          </svg>
-          {{ uploading ? '正在处理...' : '上传并校验' }}
-        </button>
-      </div>
-    </form>
-
-    <!-- 错误反馈 -->
-    <div v-if="error" class="error-banner">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="12" y1="8" x2="12" y2="12"></line>
-        <line x1="12" y1="16" x2="12.01" y2="16"></line>
-      </svg>
-      {{ error }}
-    </div>
-
-    <!-- 结果展示区 -->
-    <div v-if="result" class="result-card">
-      <div class="result-header">
-        <div class="result-title-row">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-success">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-            <polyline points="22 4 12 14.01 9 11.01"></polyline>
-          </svg>
-          <h3>校验通过并入库</h3>
-        </div>
-        <p class="result-subtitle">已登记版本记录。可前往 <RouterLink to="/packages" class="link">插件包列表</RouterLink> 查看。</p>
+      <div v-if="error" class="error-banner">
+        <span class="blink">!</span> ERROR: {{ error }}
       </div>
 
-      <dl class="data-grid">
-        <div class="data-row">
-          <dt>名称</dt>
-          <dd class="fw-500">{{ result.name }}</dd>
+      <div v-if="result" class="result-section">
+        <div class="section-tag">部署报告 (DEPLOY_LOG)</div>
+        <div class="cyber-grid">
+          <div class="grid-item">
+            <label>插件名称</label>
+            <span class="val highlight">{{ result.name }}</span>
+          </div>
+          <div class="grid-item">
+            <label>运行状态</label>
+            <span class="val status-online">ONLINE</span>
+          </div>
+          <div class="grid-item">
+            <label>版本号</label>
+            <span class="val badge">{{ result.version }}</span>
+          </div>
+          <div class="grid-item">
+            <label>包 ID</label>
+            <span class="val code">{{ result.package_id }}</span>
+          </div>
+          <div class="grid-item full">
+            <label>SHA256 摘要</label>
+            <span class="val code truncate">{{ result.digest }}</span>
+          </div>
         </div>
-        <div class="data-row">
-          <dt>版本</dt>
-          <dd><span class="badge">{{ result.version }}</span></dd>
-        </div>
-        <div class="data-row">
-          <dt>状态</dt>
-          <dd>
-            <span class="status-dot"></span>
-            {{ result.status }}
-          </dd>
-        </div>
-        <div class="data-row">
-          <dt>包 ID</dt>
-          <dd class="code-text">{{ result.package_id }}</dd>
-        </div>
-        <div class="data-row">
-          <dt>版本 ID</dt>
-          <dd class="code-text">{{ result.version_id }}</dd>
-        </div>
-        <div class="data-row">
-          <dt>审计 ID</dt>
-          <dd class="code-text">{{ result.audit_event_id }}</dd>
-        </div>
-        <div class="data-row full-width">
-          <dt>摘要 (Digest)</dt>
-          <dd class="code-text digest-text">{{ result.digest }}</dd>
-        </div>
-      </dl>
-    </div>
-  </section>
+      </div>
+    </section>
+  </div>
 </template>
 
 <style scoped>
+/* 核心变量：必须挂在组件真实根节点上。
+   Vue SFC 默认不是 Web Component，:host 不会匹配，变量会失效，
+   进而导致上传后的区域退回为浏览器/全局样式的白底黑字。 */
+.cyber-container {
+  --cyan: #00f2ff;
+  --bg-deep: #010a12;
+  --panel-bg: rgba(2, 15, 26, 0.72);
+  --panel-bg-strong: rgba(3, 22, 36, 0.9);
+  --border-cyan: rgba(0, 242, 255, 0.32);
+  --border-cyan-strong: rgba(0, 242, 255, 0.72);
+  --text-white: rgba(255, 255, 255, 0.95);
+  --text-dim: rgba(255, 255, 255, 0.55);
+
+  background-color: var(--bg-deep);
+  background-image: 
+    linear-gradient(rgba(0, 242, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 242, 255, 0.03) 1px, transparent 1px);
+  background-size: 30px 30px;
+  min-height: 100vh;
+  padding: 60px 20px;
+  font-family: 'Inter', 'PingFang SC', monospace;
+  color: var(--text-white);
+}
+
 .panel {
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-text-main: #0f172a;
-  --color-text-muted: #64748b;
-  --color-border: #e2e8f0;
-  --color-bg-subtle: #f8fafc;
-  
-  max-width: 800px;
+  max-width: 900px;
+  box-sizing: border-box;
   margin: 0 auto;
-  padding: 32px;
-  background-color: #ffffff;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.025);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: var(--color-text-main);
+  position: relative;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-cyan);
+  padding: 40px;
+  backdrop-filter: blur(15px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
 
-/* --- 头部区域 --- */
-.upload-intro {
+/* 装饰角标 */
+[class^="corner-"] {
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--cyan);
+}
+.corner-tl { top: -2px; left: -2px; border-right: 0; border-bottom: 0; }
+.corner-tr { top: -2px; right: -2px; border-left: 0; border-bottom: 0; }
+.corner-bl { bottom: -2px; left: -2px; border-right: 0; border-top: 0; }
+.corner-br { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
+
+/* 头部 */
+.intro { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
+.eyebrow { font-size: 11px; letter-spacing: 3px; color: var(--cyan); margin: 0; }
+.page-title { font-size: 28px; font-weight: 600; margin: 5px 0; color: #fff; }
+.page-desc { font-size: 13px; color: var(--text-dim); }
+
+.cyber-button-outline {
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  padding: 8px 18px;
+  font-size: 12px;
+  text-decoration: none;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 24px;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 242, 255, 0.05);
+  transition: 0.3s;
 }
-.eyebrow { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--color-text-muted); margin: 0 0 8px 0; }
-.page-title { font-size: 24px; font-weight: 600; margin: 0 0 8px 0; color: var(--color-text-main); }
-.page-desc { font-size: 14px; color: var(--color-text-muted); margin: 0; }
+.cyber-button-outline:hover { background: rgba(0, 242, 255, 0.2); box-shadow: 0 0 15px rgba(0, 242, 255, 0.2); }
 
-.secondary-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  font-size: 14px; font-weight: 500; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;
-  text-decoration: none; white-space: nowrap; padding: 8px 16px;
-  background-color: #f1f5f9; color: #334155; border: 1px solid var(--color-border);
+/* 上传区：显式覆盖可能存在的全局 form/card 样式，避免选中文件后出现白底黑字 */
+.upload-form {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
-.secondary-button:hover { background-color: #e2e8f0; }
-
-/* --- 提示框 --- */
-.template-hint {
-  margin: 0 0 24px; padding: 16px; border: 1px solid #d8e3df; border-radius: 8px; background: #f7faf9;
-  color: #314340; display: flex; gap: 12px; align-items: flex-start; font-size: 14px; line-height: 1.5;
-}
-.icon-hint { width: 20px; height: 20px; color: #437a6b; flex-shrink: 0; margin-top: 2px; }
-
-/* --- 表单与上传区 --- */
-.hidden-input { display: none; }
 
 .upload-zone {
-  display: block; width: 100%; border: 2px dashed var(--color-border); border-radius: 8px;
-  background-color: var(--color-bg-subtle); cursor: pointer; transition: all 0.2s ease;
-  padding: 32px 20px; text-align: center; margin-bottom: 24px; box-sizing: border-box;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border-cyan);
+  background: linear-gradient(135deg, rgba(0, 242, 255, 0.035), rgba(0, 0, 0, 0.45));
+  padding: 56px 40px;
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
 }
-.upload-zone:hover:not(.is-uploading) { border-color: var(--color-primary); background-color: #eff6ff; }
-.upload-zone.has-file { border-style: solid; border-color: var(--color-border); padding: 24px 20px; }
-.upload-zone.is-uploading { cursor: default; }
-
-.upload-placeholder { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.icon-upload { width: 36px; height: 36px; color: #94a3b8; margin-bottom: 8px; }
-.upload-zone:hover:not(.is-uploading) .icon-upload { color: var(--color-primary); }
-.upload-text { font-size: 15px; font-weight: 500; color: #334155; }
-.upload-format { font-size: 13px; color: var(--color-text-muted); }
-
-/* 已选择文件状态 (含进度条布局) */
-.file-selected { display: flex; flex-direction: column; gap: 16px; text-align: left; padding: 0 8px; }
-.file-info-row { display: flex; align-items: center; gap: 16px; }
-.icon-file { width: 32px; height: 32px; color: var(--color-primary); flex-shrink: 0; }
-.file-info { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
-.file-name { font-size: 15px; font-weight: 500; color: var(--color-text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-size { font-size: 13px; color: var(--color-text-muted); margin-top: 4px; }
-.file-change-text { font-size: 13px; color: var(--color-primary); font-weight: 500; }
-
-/* 进度条样式 */
-.progress-wrapper { opacity: 0; height: 0; overflow: hidden; transition: all 0.3s ease; }
-.progress-wrapper.show { opacity: 1; height: auto; margin-top: 4px; }
-.progress-track { width: 100%; height: 6px; background-color: #e2e8f0; border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
-.progress-fill { height: 100%; background-color: var(--color-primary); transition: width 0.2s ease-out; }
-.progress-text { font-size: 12px; color: var(--color-text-muted); text-align: right; font-variant-numeric: tabular-nums; }
-
-/* --- 操作按钮优化 --- */
-.form-actions { 
-  display: flex; 
-  justify-content: flex-end; 
-  /* 增加顶部间距，让按钮脱离拥挤 */
-  margin-top: 16px; 
+.upload-zone::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent 0, rgba(0, 242, 255, 0.08) 50%, transparent 100%);
+  opacity: 0.25;
 }
-.primary-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  /* 优化尺寸：加宽内边距，字体微调 */
-  padding: 12px 32px; 
-  font-size: 15px; 
-  font-weight: 600; 
-  background-color: var(--color-primary); 
-  color: #ffffff; 
+.upload-zone.is-dragging {
+  background: rgba(0, 242, 255, 0.1);
+  border-color: var(--border-cyan-strong);
+  box-shadow: 0 0 22px rgba(0, 242, 255, 0.16) inset;
+}
+.upload-zone.has-file {
+  border-style: solid;
+  border-color: var(--border-cyan-strong);
+  background: linear-gradient(135deg, rgba(0, 242, 255, 0.09), rgba(2, 15, 26, 0.86));
+}
+
+.upload-icon-glow svg { width: 48px; height: 48px; color: var(--cyan); filter: drop-shadow(0 0 10px var(--cyan)); margin-bottom: 20px; }
+.main-text { display: block; font-size: 16px; color: #fff; margin-bottom: 10px; }
+.sub-text { font-size: 12px; color: var(--text-dim); font-family: monospace; }
+
+.file-preview {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+/* 文件卡片 */
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  color: var(--text-white);
+}
+.file-ext {
+  flex: 0 0 auto;
+  min-width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 242, 255, 0.16);
+  color: var(--cyan);
+  border: 1px solid var(--border-cyan-strong);
+  box-shadow: 0 0 16px rgba(0, 242, 255, 0.12);
+  font-weight: 800;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 2px;
+  letter-spacing: 1px;
+}
+.file-meta { min-width: 0; flex: 1 1 auto; }
+.file-meta .name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 16px;
+  color: var(--text-white);
+}
+.file-meta .size { font-size: 12px; color: var(--text-dim); }
+.reselect {
+  flex: 0 0 auto;
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--cyan);
+  text-decoration: underline;
+}
+
+/* 进度条 */
+.progress-track { position: absolute; bottom: 0; left: 0; width: 100%; height: 3px; background: rgba(255, 255, 255, 0.1); display: none; }
+.progress-track.active { display: block; }
+.progress-fill { height: 100%; background: var(--cyan); box-shadow: 0 0 15px var(--cyan); transition: width 0.3s; }
+
+/* 按钮 */
+.action-row { margin-top: 30px; display: flex; justify-content: flex-end; }
+.cyber-submit-btn {
+  background: var(--cyan);
+  color: #000;
   border: none;
-  /* 优化圆角与阴影：增加现代感 */
-  border-radius: 8px; 
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
-  cursor: pointer; 
-  transition: all 0.2s ease;
-  min-width: 160px;
+  padding: 14px 50px;
+  font-weight: 800;
+  cursor: pointer;
+  clip-path: polygon(15px 0, 100% 0, calc(100% - 15px) 100%, 0 100%);
+  transition: 0.3s;
 }
-.primary-button:hover:not(:disabled) { 
-  background-color: var(--color-primary-hover); 
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
-  transform: translateY(-1px); /* 悬浮微升起动效 */
+.cyber-submit-btn:disabled { background: #1a2a35; color: #444; clip-path: none; cursor: not-allowed; }
+.cyber-submit-btn:hover:not(:disabled) { filter: brightness(1.2); box-shadow: 0 0 30px rgba(0, 242, 255, 0.4); }
+
+/* 结果网格：完全对齐主页面样式 */
+.result-section { margin-top: 50px; border-top: 1px solid var(--border-cyan); padding-top: 30px; }
+.section-tag { font-size: 12px; color: var(--cyan); margin-bottom: 20px; letter-spacing: 2px; }
+
+.cyber-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--border-cyan);
+  border: 1px solid var(--border-cyan);
 }
-.primary-button:disabled { 
-  opacity: 0.65; 
-  cursor: not-allowed; 
-  box-shadow: none;
-  transform: none;
+.grid-item {
+  background: rgba(1, 10, 18, 0.9);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grid-item.full { grid-column: span 2; }
+.grid-item label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+.grid-item .val { font-size: 14px; color: #fff; }
+.grid-item .val.code { font-family: 'Courier New', monospace; color: var(--cyan); opacity: 0.8; }
+.grid-item .val.status-online { color: #00ffcc; font-weight: bold; }
+.grid-item .val.status-online::before { content: '●'; margin-right: 8px; }
+.grid-item .val.badge { background: rgba(0, 242, 255, 0.1); border: 1px solid var(--cyan); padding: 2px 8px; font-size: 12px; width: fit-content; }
+
+.error-banner { margin-top: 25px; color: #ff4d4d; border: 1px solid rgba(255, 77, 77, 0.3); padding: 12px; background: rgba(255, 77, 77, 0.05); font-family: monospace; font-size: 13px; }
+.blink { animation: blink 1s infinite; font-weight: bold; margin-right: 10px; }
+@keyframes blink { 50% { opacity: 0; } }
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hidden-input { display: none; }
+
+@media (max-width: 768px) {
+  .cyber-container { padding: 32px 14px; }
+  .panel { padding: 26px 18px; }
+  .intro { flex-direction: column; align-items: flex-start; gap: 18px; }
+  .upload-zone { padding: 38px 20px; }
+  .file-card { gap: 12px; }
+  .reselect { margin-left: 0; }
+  .action-row { justify-content: stretch; }
+  .cyber-submit-btn { width: 100%; }
+  .cyber-grid { grid-template-columns: 1fr; }
+  .grid-item.full { grid-column: span 1; }
 }
 
-/* --- 错误反馈 --- */
-.error-banner { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background-color: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 8px; font-size: 14px; margin-bottom: 24px; }
-
-/* --- 结果数据区 --- */
-.result-card { margin-top: 32px; border-top: 1px solid var(--color-border); padding-top: 24px; }
-.result-header { margin-bottom: 20px; }
-.result-title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.icon-success { width: 24px; height: 24px; color: #10b981; }
-.result-title-row h3 { margin: 0; font-size: 18px; color: var(--color-text-main); }
-.result-subtitle { margin: 0; font-size: 14px; color: var(--color-text-muted); }
-.link { color: var(--color-primary); text-decoration: none; font-weight: 500; }
-.link:hover { text-decoration: underline; }
-
-.data-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 0; padding: 20px; background-color: var(--color-bg-subtle); border-radius: 8px; border: 1px solid var(--color-border); }
-.data-row { display: flex; flex-direction: column; gap: 4px; }
-.data-row.full-width { grid-column: span 2; }
-.data-grid dt { font-size: 12px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.data-grid dd { margin: 0; font-size: 14px; color: var(--color-text-main); display: flex; align-items: center; gap: 8px; }
-.fw-500 { font-weight: 500; }
-.badge { padding: 2px 8px; background-color: #e0e7ff; color: #4338ca; border-radius: 12px; font-size: 12px; font-weight: 600; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; background-color: #10b981; }
-.code-text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; color: #475569; }
-.digest-text { word-break: break-all; background-color: #ffffff; border: 1px solid var(--color-border); padding: 6px 10px; border-radius: 4px; display: block; width: 100%; margin-top: 4px; }
-
-.icon-sm { width: 16px; height: 16px; }
-.icon-spin { width: 16px; height: 16px; animation: spin 1s linear infinite; }
-@keyframes spin { 100% { transform: rotate(360deg); } }
 </style>

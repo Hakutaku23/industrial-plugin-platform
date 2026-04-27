@@ -2,6 +2,7 @@ ARG PYTHON_VERSION=3.12
 ARG NODE_VERSION=22-bookworm-slim
 ARG RUST_IMAGE=rust:1-bookworm
 
+
 FROM node:${NODE_VERSION} AS frontend-builder
 
 WORKDIR /build/frontend
@@ -26,7 +27,7 @@ COPY crates ./
 RUN cargo build --release -p ipp_runner_core -p ipp_scheduler_core
 
 
-FROM python:${PYTHON_VERSION}-bookworm AS python-builder
+FROM python:${PYTHON_VERSION}-bookworm AS python-deps
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -52,97 +53,7 @@ WORKDIR /build
 COPY requirements.txt /build/requirements.txt
 RUN grep -vi '^torch==' /build/requirements.txt > /build/requirements.no-torch.txt \
     && pip install -r /build/requirements.no-torch.txt \
-    && pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
-    && pip install "Cython>=3.0,<4"
-
-COPY apps/api/platform_api /build/apps/api/platform_api
-COPY apps/runner/platform_runner /build/apps/runner/platform_runner
-
-RUN python - <<'PY'
-import os
-from pathlib import Path
-from setuptools import Extension, setup
-from Cython.Build import cythonize
-
-TARGET_GROUPS = [
-    (
-        Path("/build/apps/api"),
-        [
-            Path("/build/apps/api/platform_api/core"),
-            Path("/build/apps/api/platform_api/services"),
-        ],
-    ),
-    (
-        Path("/build/apps/runner"),
-        [
-            Path("/build/apps/runner/platform_runner"),
-        ],
-    ),
-]
-
-compiled_sources: list[str] = []
-
-for base, package_roots in TARGET_GROUPS:
-    os.chdir(base)
-    extensions = []
-    for package_root in package_roots:
-        for source in package_root.rglob("*.py"):
-            if source.name == "__init__.py":
-                continue
-            module_name = ".".join(source.relative_to(base).with_suffix("").parts)
-            extensions.append(Extension(module_name, [str(source.relative_to(base))]))
-            compiled_sources.append(str(source))
-
-    if not extensions:
-        continue
-
-    setup(
-        script_name="setup.py",
-        script_args=["build_ext", "--inplace", "-j", "4"],
-        ext_modules=cythonize(
-            extensions,
-            compiler_directives={
-                "language_level": "3",
-                "embedsignature": True,
-                "binding": True,
-            },
-            build_dir=str(Path("/build/.cython-build") / base.name),
-            nthreads=4,
-        ),
-    )
-
-Path("/build/compiled-python-files.txt").write_text(
-    "\n".join(sorted(set(compiled_sources))) + "\n",
-    encoding="utf-8",
-)
-PY
-
-RUN PYTHONPATH=/build/apps/api:/build/apps/runner python - <<'PY'
-import platform_api.main  # noqa: F401
-import platform_runner.executor  # noqa: F401
-import platform_runner.function_host  # noqa: F401
-print("compiled python modules import check passed")
-PY
-
-RUN python - <<'PY'
-from pathlib import Path
-import shutil
-
-compiled_list = Path("/build/compiled-python-files.txt")
-if compiled_list.exists():
-    for line in compiled_list.read_text(encoding="utf-8").splitlines():
-        source = Path(line.strip())
-        if not source:
-            continue
-        if source.exists():
-            source.unlink()
-
-for pycache in Path("/build/apps").rglob("__pycache__"):
-    shutil.rmtree(pycache, ignore_errors=True)
-
-shutil.rmtree("/build/.cython-build", ignore_errors=True)
-compiled_list.unlink(missing_ok=True)
-PY
+    && pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
 
 
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
@@ -158,13 +69,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONPATH=/opt/app/apps/api:/opt/app/apps/runner \
     PLATFORM_PROJECT_ROOT=/opt/app \
     PLATFORM_UI_SERVE_DIST=true \
-    PLATFORM_UI_DIST_DIR=/opt/app/frontend/dist
+    PLATFORM_UI_DIST_DIR=/opt/app/frontend/dist \
+    PLATFORM_RUNNER_BINARY_PATH=bin/ipp_runner_core \
+    PLATFORM_SCHEDULER_DAEMON_BINARY_PATH=bin/ipp_scheduler_core
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
+    libffi8 \
     libgcc-s1 \
     libgomp1 \
+    libssl3 \
     libstdc++6 \
     locales \
     && sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
@@ -173,18 +88,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /opt/app
 
-COPY --from=python-builder /opt/venv /opt/venv
-COPY --from=python-builder /build/apps/api/platform_api /opt/app/apps/api/platform_api
-COPY --from=python-builder /build/apps/runner/platform_runner /opt/app/apps/runner/platform_runner
-COPY --from=rust-builder /build/crates/target/release/ /opt/app/target/release/
+COPY --from=python-deps /opt/venv /opt/venv
+
+# Python 源码不编译、不删除，完整保留在 Docker 镜像内，便于厂区第一版上线测试与现场排查。
+COPY apps/api/platform_api /opt/app/apps/api/platform_api
+COPY apps/runner/platform_runner /opt/app/apps/runner/platform_runner
+
+# Rust 部分仍然编译后进入 runtime 镜像。
+COPY --from=rust-builder /build/crates/target/release/ipp_runner_core /opt/app/bin/ipp_runner_core
+COPY --from=rust-builder /build/crates/target/release/ipp_scheduler_core /opt/app/bin/ipp_scheduler_core
+
 COPY --from=frontend-builder /build/frontend/dist /opt/app/frontend/dist
 COPY config /opt/app/config
+COPY requirements.txt /opt/app/requirements.txt
 
-RUN mkdir -p \
-    /opt/app/target/release \
-    /opt/app/var/packages \
-    /opt/app/var/runs \
-    /opt/app/var/manual-package-check
+RUN chmod +x /opt/app/bin/ipp_runner_core /opt/app/bin/ipp_scheduler_core \
+    && mkdir -p \
+        /opt/app/target/release \
+        /opt/app/var/packages \
+        /opt/app/var/runs \
+        /opt/app/var/manual-package-check \
+        /opt/app/var/license \
+    && ln -sf /opt/app/bin/ipp_runner_core /opt/app/target/release/ipp_runner_core \
+    && ln -sf /opt/app/bin/ipp_scheduler_core /opt/app/target/release/ipp_scheduler_core \
+    && python - <<'PY'
+import platform_api.main  # noqa: F401
+import platform_runner.executor  # noqa: F401
+import platform_runner.function_host  # noqa: F401
+print('python source import check passed')
+PY
 
 EXPOSE 8000
 

@@ -1320,13 +1320,13 @@ onUnmounted(() => {
   <section class="panel instances-page">
     <div class="intro page-heading">
       <div class="heading-text">
-        <p class="eyebrow">实例管理</p>
-        <h2>实例管理</h2>
+        <p class="eyebrow">OBSERVABILITY</p>
+        <h2>实例管理 (Instance Operations)</h2>
         <p class="subtitle">管理工业插件的运行实例。配置位点绑定、执行定时任务或手动触发实例运行。</p>
       </div>
       <div class="header-actions">
         <button type="button" class="secondary-button" @click="loadAll" :disabled="loading">
-          {{ loading ? '↻ 刷新中...' : '↻ 刷新数据' }}
+          {{ loading ? '↻ 刷新中...' : '↻ 刷新状态' }}
         </button>
         <button type="button" class="primary-button" @click="showCreateForm">
           + 创建新实例
@@ -1334,10 +1334,10 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="error" class="error-banner">⚠️ {{ error }}</div>
+    <div v-if="error" class="error-banner">⚠ {{ error }}</div>
 
     <div v-if="instances.length === 0" class="empty-state">
-      <p>暂无正在运行的实例 🍃</p>
+      <p>当前环境无正在运行的实例</p>
       <button type="button" class="primary-button" @click="showCreateForm">+ 立即创建一个</button>
     </div>
 
@@ -1350,19 +1350,19 @@ onUnmounted(() => {
           </div>
           <div class="status-indicator">
             <span class="status-dot" :class="{ running: instance.status === 'running', stopped: instance.status === 'stopped', error: instance.status === 'error' }"></span>
-            {{ instance.status }}
+            {{ instance.status === 'running' ? 'ONLINE' : (instance.status === 'stopped' ? 'OFFLINE' : instance.status) }}
           </div>
         </div>
 
         <div class="card-body">
           <div class="info-row">
-            <span class="info-label">回写策略:</span>
+            <span class="info-label">回写策略</span>
             <span class="info-value" :class="{ 'text-danger': instance.writeback_enabled, 'text-success': !instance.writeback_enabled }">
-              {{ instance.writeback_enabled ? '⚠️ 允许真实回写' : '🛡️ 仅 Dry-run' }}
+              {{ instance.writeback_enabled ? '⚠ 允许真实回写' : '🛡 仅 Dry-run' }}
             </span>
           </div>
           <div class="info-row">
-            <span class="info-label">定时规则:</span>
+            <span class="info-label">定时规则</span>
             <span class="info-value">
               {{ instance.schedule_enabled ? `⏱ 每 ${formatScheduleInterval(instance.schedule_interval_sec)}` : '⏸ 未启用定时' }}
             </span>
@@ -1381,9 +1381,9 @@ onUnmounted(() => {
         </div>
 
         <div class="card-actions-bar">
-          <button type="button" class="btn-icon" title="修改" @click="editInstance(instance)">⚙️ 配置</button>
+          <button type="button" class="btn-icon" title="修改" @click="editInstance(instance)">⚙ 配置</button>
           <button type="button" class="btn-icon" title="手动运行" @click="run(instance)" :disabled="runningId === instance.id">
-            {{ runningId === instance.id ? '⏳...' : '▶️ 运行' }}
+            {{ runningId === instance.id ? '⏳...' : '▶ 运行' }}
           </button>
           <button v-if="instance.schedule_enabled" type="button" class="btn-icon text-warning" title="停止定时" @click="stopSchedule(instance)" :disabled="operatingId === instance.id">
             ⏸ 停用
@@ -1405,7 +1405,7 @@ onUnmounted(() => {
             <div v-for="run in recentRunsForInstance(instance)" :key="run.run_id" class="history-item">
               <div class="history-item-head">
                 <span class="run-type">[{{ run.trigger_type }}]</span>
-                <span class="run-status" :class="run.status">{{ run.status }}</span>
+                <span class="run-status" :class="run.status">{{ run.status === 'error' ? 'FAILED' : run.status }}</span>
                 <span class="run-time">{{ formatTime(run.finished_at) }}</span>
               </div>
               <pre class="run-logs">{{ stringify({ outputs: run.outputs, error: run.error }) }}</pre>
@@ -1424,7 +1424,7 @@ onUnmounted(() => {
     <div v-if="isInstanceModalVisible" class="modal-mask" @click.self="cancelForm">
       <div class="modal-shell instance-modal-shell">
         <div class="modal-header">
-          <h3>{{ editingInstanceId ? '⚙️ 修改实例配置' : '✨ 创建新实例' }}</h3>
+          <h3>{{ editingInstanceId ? '⚙ 修改实例配置' : '✨ 创建新实例' }}</h3>
           <button type="button" class="secondary-button small-button" @click="cancelForm">关闭</button>
         </div>
 
@@ -1505,7 +1505,7 @@ onUnmounted(() => {
                 </div>
                 <div v-else class="empty-inline">当前版本未声明输入接口。</div>
                 <p v-if="missingRequiredInputNames.length > 0" class="error-inline">
-                  ⚠️ 缺少必填输入绑定：{{ missingRequiredInputNames.join(', ') }}
+                  ⚠ 缺少必填输入绑定：{{ missingRequiredInputNames.join(', ') }}
                 </p>
               </div>
 
@@ -2001,50 +2001,70 @@ onUnmounted(() => {
 
 <style scoped>
 /* ==========================================
-   1. 设计令牌 (Design Tokens) - 现代化变量定义
+   1. 设计令牌 (Design Tokens) - 赛博/深色工业风
    ========================================== */
 .instances-page {
-  /* 主色调：克制、专业的工业绿灰调 */
-  --color-primary: #115e59;
-  --color-primary-hover: #0f766e;
-  --color-success: #059669;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
+  --color-primary: #00e5ff; /* 青色/Cyan */
+  --color-primary-hover: #00b8d4;
+  --color-success: #00e676; /* 亮绿 */
+  --color-warning: #ffb300; /* 亮黄 */
+  --color-danger: #ff4d4f;  /* 亮红 */
   
-  /* 表面与背景 */
-  --color-bg-base: #f8fafc;
-  --color-bg-surface: #ffffff;
-  --color-bg-subtle: #f1f5f9;
-  --color-bg-muted: #e2e8f0;
+  --color-bg-base: #020914; /* 页面底色，极深的星空蓝 */
+  --color-bg-surface: rgba(4, 18, 36, 0.8); /* 面板背景 */
+  --color-bg-subtle: rgba(13, 34, 56, 0.6);
+  --color-bg-muted: rgba(255, 255, 255, 0.05);
 
-  /* 边框 */
-  --color-border: #cbd5e1;
-  --color-border-hover: #94a3b8;
-  --color-border-focus: #115e59;
+  --color-border: rgba(0, 229, 255, 0.2);
+  --color-border-hover: rgba(0, 229, 255, 0.5);
+  --color-border-focus: #00e5ff;
 
-  /* 文本层次 */
-  --color-text-main: #0f172a;
-  --color-text-muted: #475569;
-  --color-text-light: #64748b;
+  --color-text-main: #e2e8f0;
+  --color-text-muted: #8ba1b5;
+  --color-text-light: #567391;
 
-  /* 空间与圆角 */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-xl: 4px; /* 去除原有的大圆角设定 */
 
-  /* 多层级阴影 (Elevation) */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
-  --shadow-focus: 0 0 0 3px rgba(17, 94, 89, 0.15);
+  --shadow-sm: none;
+  --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 20px rgba(0, 0, 0, 0.6);
+  --shadow-focus: 0 0 8px rgba(0, 229, 255, 0.5);
 
   --transition-all: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 
-  max-width: 1440px;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 24px 12px;
   margin: 0 auto;
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--color-text-main);
+  
+  /* 全局科技网格背景 */
+  background-color: var(--color-bg-base);
+  background-image: 
+    linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
+/* 全局滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 229, 255, 0.2);
+  border-radius: var(--radius-sm);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
 }
 
 /* ==========================================
@@ -2057,13 +2077,24 @@ onUnmounted(() => {
   margin-bottom: 32px;
   padding-bottom: 24px;
   border-bottom: 1px solid var(--color-border);
+  position: relative;
+}
+.page-heading::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 120px;
+  height: 2px;
+  background: var(--color-primary);
+  box-shadow: 0 0 8px var(--color-primary);
 }
 .heading-text { display: flex; flex-direction: column; gap: 4px; }
 .eyebrow {
   margin: 0;
   font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-primary);
 }
@@ -2071,12 +2102,13 @@ onUnmounted(() => {
   margin: 0;
   font-size: 28px;
   font-weight: 800;
-  letter-spacing: -0.02em;
-  color: var(--color-text-main);
+  letter-spacing: 1px;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
 }
 .subtitle {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--color-text-muted);
 }
 .header-actions { display: flex; gap: 12px; }
@@ -2103,46 +2135,46 @@ button {
   white-space: nowrap;
 }
 .primary-button {
-  background: var(--color-primary);
-  color: #ffffff;
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: inset 0 0 10px rgba(0, 229, 255, 0.2);
 }
 .primary-button:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  background: rgba(0, 229, 255, 0.2);
+  box-shadow: inset 0 0 15px rgba(0, 229, 255, 0.4);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
 }
 .secondary-button {
-  background: var(--color-bg-surface);
+  background: rgba(255, 255, 255, 0.05);
   border-color: var(--color-border);
   color: var(--color-text-main);
-  box-shadow: var(--shadow-sm);
 }
 .secondary-button:hover:not(:disabled) {
-  background: var(--color-bg-subtle);
-  border-color: var(--color-border-hover);
+  background: rgba(0, 229, 255, 0.1);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 .danger-button {
-  background: #fffef2;
-  border-color: #fca5a5;
+  background: rgba(255, 77, 79, 0.1);
+  border-color: rgba(255, 77, 79, 0.5);
   color: var(--color-danger);
 }
 .danger-button:hover:not(:disabled) {
-  background: #fef2f2;
+  background: rgba(255, 77, 79, 0.2);
   border-color: var(--color-danger);
 }
 .btn-icon {
   padding: 8px 12px;
-  background: var(--color-bg-surface);
-  border-color: var(--color-border);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.1);
   color: var(--color-text-muted);
-  box-shadow: var(--shadow-sm);
   flex: 1;
 }
 .btn-icon:hover:not(:disabled) {
-  background: var(--color-bg-subtle);
-  color: var(--color-text-main);
-  border-color: var(--color-border-hover);
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
 }
 .small-button {
   padding: 6px 12px;
@@ -2165,12 +2197,12 @@ input, select, textarea {
   padding: 10px 14px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-bg-surface);
+  background: rgba(0, 0, 0, 0.5);
   font-size: 14px;
-  color: var(--color-text-main);
+  color: #fff;
   transition: var(--transition-all);
   box-sizing: border-box;
-  box-shadow: var(--shadow-sm);
+  color-scheme: dark;
 }
 input:hover, select:hover, textarea:hover {
   border-color: var(--color-border-hover);
@@ -2178,7 +2210,12 @@ input:hover, select:hover, textarea:hover {
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--color-border-focus);
-  box-shadow: var(--shadow-focus);
+  box-shadow: inset 0 0 5px rgba(0, 229, 255, 0.3);
+}
+input:disabled, select:disabled {
+  background: rgba(255,255,255,0.05);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
 }
 textarea { font-family: ui-monospace, monospace; resize: vertical; }
 
@@ -2189,12 +2226,12 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  background: var(--color-bg-surface);
+  background: rgba(0, 0, 0, 0.3);
   transition: var(--transition-all);
 }
 .checkbox-box:hover {
   border-color: var(--color-border-focus);
-  background: var(--color-bg-base);
+  background: rgba(0, 229, 255, 0.05);
 }
 .checkbox-box input[type="checkbox"] {
   width: 18px;
@@ -2213,22 +2250,22 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   justify-content: center;
   gap: 16px;
   padding: 60px 20px;
-  background: var(--color-bg-subtle);
-  border: 1px dashed var(--color-border-hover);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px dashed rgba(0, 229, 255, 0.3);
   border-radius: var(--radius-lg);
   color: var(--color-text-muted);
   font-size: 15px;
 }
 .empty-inline { padding: 32px 20px; font-size: 14px; }
 .error-banner {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
+  background: rgba(255, 77, 79, 0.1);
+  border: 1px solid #ff4d4f;
+  color: #ff4d4f;
   padding: 14px 16px;
   border-radius: var(--radius-md);
   margin-bottom: 24px;
   font-weight: 600;
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 0 10px rgba(255, 77, 79, 0.2);
 }
 
 .instances-grid {
@@ -2236,42 +2273,90 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 24px;
 }
-.instance-card {
+
+/* 核心的科技感面板基类 */
+.instance-card,
+.modal-shell,
+.form-panel,
+.binding-list-card,
+.binding-summary-card,
+.mapping-table,
+.manifest-block {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
+  position: relative;
+}
+
+/* 面板边角修饰装饰 */
+.instance-card::before,
+.modal-shell::before,
+.form-panel::before,
+.binding-list-card::before,
+.binding-summary-card::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 12px;
+  height: 12px;
+  border-top: 2px solid var(--color-primary);
+  border-left: 2px solid var(--color-primary);
+  pointer-events: none;
+}
+.instance-card::after,
+.modal-shell::after,
+.form-panel::after,
+.binding-list-card::after,
+.binding-summary-card::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 12px;
+  height: 12px;
+  border-bottom: 2px solid var(--color-primary);
+  border-right: 2px solid var(--color-primary);
+  pointer-events: none;
+}
+
+.instance-card {
   padding: 24px;
   display: flex;
   flex-direction: column;
   transition: var(--transition-all);
-  box-shadow: var(--shadow-sm);
 }
 .instance-card:hover {
-  border-color: var(--color-border-hover);
-  box-shadow: var(--shadow-lg);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.2);
   transform: translateY(-2px);
 }
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 20px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 12px;
 }
 .card-title-wrap h3 {
   margin: 0 0 8px 0;
   font-size: 18px;
   font-weight: 700;
-  color: var(--color-text-main);
+  color: var(--color-primary);
+  text-shadow: 0 0 5px rgba(0, 229, 255, 0.3);
   line-height: 1.2;
 }
 .version-badge {
   display: inline-block;
-  background: var(--color-bg-muted);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--color-text-main);
   padding: 4px 10px;
-  border-radius: 999px;
+  border-radius: 2px;
   font-size: 12px;
   font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 .status-indicator {
   display: flex;
@@ -2279,11 +2364,12 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   gap: 8px;
   font-size: 12px;
   font-weight: 700;
-  color: var(--color-text-muted);
+  color: var(--color-text-main);
   text-transform: uppercase;
-  background: var(--color-bg-subtle);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 6px 12px;
-  border-radius: 999px;
+  border-radius: 2px;
 }
 .status-dot {
   width: 8px;
@@ -2291,9 +2377,9 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   border-radius: 50%;
   background: var(--color-text-light);
 }
-.status-dot.running { background: var(--color-success); box-shadow: 0 0 8px rgba(5,150,105,0.4); }
-.status-dot.stopped { background: var(--color-danger); }
-.status-dot.error { background: var(--color-warning); }
+.status-dot.running { background: var(--color-success); box-shadow: 0 0 8px var(--color-success); }
+.status-dot.stopped { background: var(--color-danger); box-shadow: 0 0 8px var(--color-danger); }
+.status-dot.error { background: var(--color-warning); box-shadow: 0 0 8px var(--color-warning); }
 
 .card-body { flex-grow: 1; }
 .info-row {
@@ -2302,7 +2388,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   font-size: 14px;
   margin-bottom: 12px;
   color: var(--color-text-muted);
-  border-bottom: 1px dashed var(--color-border);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   padding-bottom: 8px;
 }
 .info-label { font-weight: 500; }
@@ -2315,14 +2401,15 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  background: var(--color-bg-subtle);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   padding: 16px;
   border-radius: var(--radius-md);
   margin-top: 20px;
 }
 .time-box { display: flex; flex-direction: column; gap: 4px; }
 .time-label { font-size: 12px; color: var(--color-text-muted); }
-.time-val { font-size: 13px; font-weight: 700; color: var(--color-text-main); }
+.time-val { font-size: 13px; font-weight: 700; color: #fff; }
 
 .card-actions-bar {
   display: flex;
@@ -2335,7 +2422,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
 /* 运行历史 */
 .run-history-expander {
   margin-top: 16px;
-  background: var(--color-bg-base);
+  background: rgba(0, 0, 0, 0.3);
   border-radius: var(--radius-md);
   padding: 12px 16px;
   border: 1px solid var(--color-border);
@@ -2344,7 +2431,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  color: var(--color-text-muted);
+  color: var(--color-primary);
   outline: none;
   user-select: none;
 }
@@ -2354,7 +2441,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   padding-top: 16px;
 }
 .history-item {
-  border-left: 3px solid var(--color-border-hover);
+  border-left: 2px solid var(--color-border-hover);
   padding-left: 14px;
   margin-bottom: 16px;
 }
@@ -2367,25 +2454,23 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
 }
 .run-type { color: var(--color-primary); }
 .run-time { color: var(--color-text-light); font-weight: 400; font-size: 12px; }
-.run-logs {
+.run-logs, .manual-run-result pre {
   margin: 0;
-  background: #1e293b;
-  color: #f8fafc;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--color-success); /* 终端绿 */
+  border: 1px solid rgba(255,255,255,0.1);
   padding: 12px;
   border-radius: var(--radius-sm);
   font-size: 12px;
   overflow-x: auto;
   max-height: 200px;
+  font-family: ui-monospace, monospace;
 }
 .manual-run-result {
   margin-top: 16px;
-  background: #1e293b;
-  color: #f8fafc;
-  padding: 16px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
+  padding: 0;
 }
-.result-title { margin: 0 0 10px 0; font-weight: 600; color: #94a3b8; }
+.result-title { margin: 0 0 10px 0; font-weight: 600; color: var(--color-primary); }
 
 /* ==========================================
    5. 弹窗系统 (Modals)
@@ -2393,8 +2478,8 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.6);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2402,9 +2487,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   z-index: 2000;
 }
 .modal-shell {
-  background: var(--color-bg-surface);
-  border-radius: var(--radius-xl);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 30px rgba(0, 229, 255, 0.15);
   display: flex;
   flex-direction: column;
   width: min(1120px, 100%);
@@ -2420,39 +2503,31 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   justify-content: space-between;
   padding: 20px 32px;
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-surface);
-  border-top-left-radius: var(--radius-xl);
-  border-top-right-radius: var(--radius-xl);
+  background: rgba(4, 18, 36, 0.95);
 }
-.modal-header h3 { margin: 0; font-size: 20px; font-weight: 800; color: var(--color-text-main); }
-.modal-body { padding: 32px; overflow-y: auto; background: var(--color-bg-base); }
+.modal-header h3 { margin: 0; font-size: 18px; font-weight: 700; color: var(--color-primary); }
+.modal-body { padding: 32px; overflow-y: auto; background: rgba(2, 9, 20, 0.95); }
 .modal-footer {
   padding: 20px 32px;
   border-top: 1px solid var(--color-border);
-  background: var(--color-bg-surface);
+  background: rgba(4, 18, 36, 0.95);
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  border-bottom-left-radius: var(--radius-xl);
-  border-bottom-right-radius: var(--radius-xl);
 }
 
 /* ==========================================
    6. 复杂表单、网格与列表区域 (Forms & Grids)
    ========================================== */
 .form-panel {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
   padding: 24px;
   margin-bottom: 24px;
-  box-shadow: var(--shadow-sm);
 }
 .panel-title {
   margin: 0 0 24px 0;
   font-size: 16px;
   font-weight: 700;
-  color: var(--color-text-main);
+  color: var(--color-primary);
 }
 .instance-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
 .schedule-picker { display: flex; flex-direction: column; gap: 8px; }
@@ -2461,50 +2536,42 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
 .schedule-select-row label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .schedule-note { margin: 0; }
 
-.binding-summary-panel { display: grid; gap: 16px; }
+.binding-summary-panel { display: grid; gap: 16px; background: transparent; border: none; padding: 0;}
 .binding-summary-card {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   padding: 24px;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
 }
 .binding-summary-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .summary-pill {
   display: inline-flex;
   align-items: center;
   padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--color-bg-subtle);
-  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   font-size: 12px;
   font-weight: 500;
   color: var(--color-text-main);
 }
 
 .binding-list-modal-body { display: grid; gap: 20px; }
-.binding-list-card, .binding-card {
+.binding-list-card {
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding: 24px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-sm);
 }
 .binding-head { display: flex; align-items: center; justify-content: space-between; }
-.binding-title-line { display: flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 700; }
+.binding-title-line { display: flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 700; color: var(--color-primary); }
 .binding-list-actions { display: flex; gap: 12px; }
 .binding-basic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
 .binding-single-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.manifest-history-panel { margin-top: 16px; padding: 14px; border: 1px solid #bfdbfe; border-radius: 14px; background: #eff6ff; display: grid; gap: 10px; }
-.manifest-history-title { font-weight: 700; color: #1e40af; }
+.manifest-history-panel { margin-top: 16px; padding: 14px; border: 1px solid rgba(0, 229, 255, 0.3); border-radius: var(--radius-md); background: rgba(0, 229, 255, 0.05); display: grid; gap: 10px; }
+.manifest-history-title { font-weight: 700; color: var(--color-primary); }
 .manifest-history-tags { display: flex; flex-wrap: wrap; gap: 8px; }
-.manifest-history-tag { padding: 4px 10px; border-radius: 999px; background: #dbeafe; color: #1e3a8a; font-size: 12px; font-weight: 600; }
+.manifest-history-tag { padding: 4px 10px; border-radius: 2px; background: rgba(0, 229, 255, 0.1); color: var(--color-primary); font-size: 12px; border: 1px solid rgba(0, 229, 255, 0.3); }
 .history-window-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
 .history-checkbox { align-self: end; min-height: 40px; }
 .history-note { margin-top: 12px; }
@@ -2517,16 +2584,13 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   justify-content: center;
   gap: 4px;
   padding: 10px 14px;
-  border: 1px solid var(--color-border-focus);
+  border: 1px solid rgba(0, 229, 255, 0.5);
   border-radius: var(--radius-sm);
-  background: #f0fdfa; /* 极为微弱的薄荷绿强调色 */
+  background: rgba(0, 229, 255, 0.05);
 }
 
 /* 映射规则与列表项 */
 .mapping-table, .manifest-block {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
   overflow: hidden;
 }
 .mapping-head, .manifest-head {
@@ -2534,7 +2598,8 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   justify-content: space-between;
   align-items: center;
   padding: 14px 20px;
-  background: var(--color-bg-subtle);
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--color-primary);
   border-bottom: 1px solid var(--color-border);
   font-size: 14px;
 }
@@ -2543,7 +2608,7 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   grid-template-columns: minmax(0, 1fr) minmax(240px, 0.9fr);
   gap: 16px;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   align-items: center;
 }
 .mapping-row:last-child { border-bottom: none; }
@@ -2554,11 +2619,12 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--color-bg-base);
-  border: 1px solid var(--color-border);
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-sm);
   font-family: ui-monospace, monospace;
   font-size: 13px;
+  color: #fff;
 }
 .mapping-target-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
@@ -2570,22 +2636,22 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
   font-size: 13px;
   font-weight: 600;
-  background: var(--color-bg-surface);
+  background: rgba(0, 0, 0, 0.3);
 }
-.manifest-chip small { color: var(--color-text-light); font-weight: 400; }
+.manifest-chip small { color: var(--color-text-muted); font-weight: 400; }
 .manifest-chip.required {
-  border-color: #fca5a5;
-  background: #fef2f2;
-  color: var(--color-danger);
+  border-color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff4d4f;
 }
 .required-badge {
   padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--color-danger);
+  border-radius: 2px;
+  background: #ff4d4f;
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -2617,13 +2683,19 @@ textarea { font-family: ui-monospace, monospace; resize: vertical; }
   animation: modal-slide-down 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+@media (max-width: 768px) {
+  .instances-page{
+    padding: 16px 8px;
+  }
+}
+
 @keyframes modal-slide-up {
-  from { opacity: 0; transform: translateY(24px) scale(0.98); box-shadow: var(--shadow-sm); }
+  from { opacity: 0; transform: translateY(24px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 @keyframes modal-slide-down {
   from { opacity: 1; transform: translateY(0) scale(1); }
-  to { opacity: 0; transform: translateY(12px) scale(0.98); box-shadow: var(--shadow-sm); }
+  to { opacity: 0; transform: translateY(12px) scale(0.98); }
 }
 
 @media (max-width: 1024px) {

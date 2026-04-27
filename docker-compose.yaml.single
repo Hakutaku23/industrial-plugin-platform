@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  ipp-platform:
+    image: ${IPP_IMAGE:-ipp-platform:v1.0}
+    container_name: ${IPP_CONTAINER_NAME:-ipp-platform}
+    restart: unless-stopped
+    ports:
+      - "${IPP_HTTP_PORT:-8000}:8000"
+    volumes:
+      - ./config:/opt/app/config
+      - ./var:/opt/app/var
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      PLATFORM_PROJECT_ROOT: "/opt/app"
+      PLATFORM_ENVIRONMENT: "${PLATFORM_ENVIRONMENT:-prod}"
+      PLATFORM_METADATA_BACKEND: "mysql"
+      PLATFORM_METADATA_DB_URL: "${PLATFORM_METADATA_DB_URL:-mysql+pymysql://platform:change_me@mysql-host:3306/industrial_plugin_platform?charset=utf8mb4}"
+      PLATFORM_SCHEDULER_REDIS_URL: "${PLATFORM_SCHEDULER_REDIS_URL:-redis://redis-host:6379/0}"
+      PLATFORM_SCHEDULER_DAEMON_BINARY_PATH: "/opt/app/target/release/ipp_scheduler_core"
+      PLATFORM_SCHEDULER_INTERNAL_BASE_URL: "http://127.0.0.1:8000"
+      PLATFORM_RUNNER_BINARY_PATH: "/opt/app/target/release/ipp_runner_core"
+      PLATFORM_RUNNER_PYTHON_EXECUTABLE: "python"
+      TDENGINE_URL: "${TDENGINE_URL:-http://tdengine-host:6041}"
+      TDENGINE_USER: "${TDENGINE_USER:-root}"
+      TDENGINE_PASSWORD: "${TDENGINE_PASSWORD:-taosdata}"
+      TDENGINE_DATABASE: "${TDENGINE_DATABASE:-ipp_test}"
+      TDENGINE_TABLE_NAME: "${TDENGINE_TABLE_NAME:-point_history}"

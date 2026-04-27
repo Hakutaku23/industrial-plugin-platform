@@ -34,9 +34,6 @@ spec:
           bindingType: history
           connectorType: tdengine
           lockConnectorType: true
-          dataSource:
-            database: ipp_test
-            table_name: point_history
           sourceTags:
             - DCS_AO_001
             - DCS_AO_002

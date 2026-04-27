@@ -167,18 +167,36 @@ class RedisConnector(Connector):
             raise ConnectorError("redis package is not installed in the Python environment") from exc
 
         config = data_source["config"]
-        self.prefix = str(config.get("keyPrefix", "")).strip()
-        raw_separator = config.get("keySeparator", ":")
+        self.prefix = str(config.get("keyPrefix", config.get("key_prefix", ""))).strip()
+        raw_separator = config.get("keySeparator", config.get("key_separator", ":"))
         self.separator = ":" if raw_separator is None or str(raw_separator) == "" else str(raw_separator)
-        self.client = redis.Redis(
-            host=config.get("host", "127.0.0.1"),
-            port=int(config.get("port", 6379)),
-            db=int(config.get("db", 0)),
-            password=config.get("password") or None,
-            decode_responses=True,
-            socket_connect_timeout=float(config.get("connectTimeoutSec", 2)),
-            socket_timeout=float(config.get("socketTimeoutSec", 2)),
-        )
+
+        self.username = str(config.get("username", config.get("user", ""))).strip() or None
+        raw_password = config.get("password")
+        self.password = str(raw_password) if raw_password is not None and str(raw_password) != "" else None
+        redis_url = str(config.get("url", config.get("redisUrl", config.get("redis_url", "")))).strip()
+
+        connect_timeout = float(config.get("connectTimeoutSec", config.get("connect_timeout_sec", 2)))
+        socket_timeout = float(config.get("socketTimeoutSec", config.get("socket_timeout_sec", 2)))
+
+        if redis_url:
+            self.client = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=connect_timeout,
+                socket_timeout=socket_timeout,
+            )
+        else:
+            self.client = redis.Redis(
+                host=str(config.get("host", "127.0.0.1")).strip() or "127.0.0.1",
+                port=int(config.get("port", 6379)),
+                db=int(config.get("db", 0)),
+                username=self.username,
+                password=self.password,
+                decode_responses=True,
+                socket_connect_timeout=connect_timeout,
+                socket_timeout=socket_timeout,
+            )
 
     def read_tag(self, tag: str) -> Any:
         ensure_tag_access(self.data_source, tag, "read")
@@ -279,7 +297,10 @@ class TDengineConnector(Connector):
         raise ConnectorError("tdengine data source is read-only")
 
     def write_tags(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        return {tag: {"status": "failed", "value": value, "reason": "tdengine data source is read-only"} for tag, value in values.items()}
+        return {
+            tag: {"status": "failed", "value": value, "reason": "tdengine data source is read-only"}
+            for tag, value in values.items()
+        }
 
     def query_history(
         self,
@@ -573,7 +594,6 @@ def _dataframe_payload(
     }
 
 
-
 def _naive_datetime(value: datetime) -> datetime:
     """Return a tz-naive datetime while preserving the displayed local clock time."""
     if value.tzinfo is None:
@@ -610,6 +630,7 @@ def _naive_pandas_timestamp(value):
     if isinstance(value, datetime) and value.tzinfo is not None:
         return value.replace(tzinfo=None)
     return value
+
 
 def _sql_identifier(value: str) -> str:
     normalized = str(value).strip()

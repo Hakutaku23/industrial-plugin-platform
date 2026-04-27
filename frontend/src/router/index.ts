@@ -10,7 +10,7 @@ import Login from '../views/Login.vue'
 import PluginList from '../views/PluginList.vue'
 import PluginUpload from '../views/PluginUpload.vue'
 import RunList from '../views/RunList.vue'
-import SystemObservability from '../views/SystemObservability.vue'
+// import SystemObservability from '../views/SystemObservability.vue'
 import UserProfile from '../views/UserProfile.vue'
 
 export const router = createRouter({
@@ -24,7 +24,7 @@ export const router = createRouter({
     { path: '/data-sources', name: 'data-sources', component: DataSources, meta: { permission: 'datasource.read' } },
     { path: '/instances', name: 'instances', component: Instances, meta: { permission: 'instance.read' } },
     { path: '/runs', name: 'run-list', component: RunList, meta: { permission: 'run.read' } },
-    { path: '/system/observability', name: 'system-observability', component: SystemObservability, meta: { permission: 'system.read' } },
+    // { path: '/system/observability', name: 'system-observability', component: SystemObservability, meta: { permission: 'system.read' } },
     { path: '/license', name: 'license-center', component: LicenseCenter, meta: { permission: 'system.read' } },
     { path: '/admin/users', name: 'admin-users', component: AdminUsers, meta: { permission: 'user.read' } },
     { path: '/profile', name: 'profile', component: UserProfile },

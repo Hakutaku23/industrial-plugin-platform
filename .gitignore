@@ -34,3 +34,5 @@ docs/*
 !docs/README.md
 !scripts/build-frontend.mjs
 tools/
+*.bak
+patches/*

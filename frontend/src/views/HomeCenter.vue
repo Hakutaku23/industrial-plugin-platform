@@ -1,281 +1,244 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
-import { listInstances, listPackages, listRuns } from '../api/packages'
-import { getObservabilitySummary, type ObservabilitySummary } from '../api/observability'
+import { getObservabilitySummary, type ObservabilitySummary, type ScheduleRunRecord } from '../api/observability'
 
 const loading = ref(false)
 const error = ref('')
 const summary = ref<ObservabilitySummary | null>(null)
-const packageCount = ref(0)
-const instanceCount = ref(0)
-const totalRunCount = ref(0)
 
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [obs, packages, instances, runs] = await Promise.all([
-      getObservabilitySummary(),
-      listPackages(),
-      listInstances(),
-      listRuns(),
-    ])
-    summary.value = obs
-    packageCount.value = packages.length
-    instanceCount.value = instances.length
-    totalRunCount.value = runs.length
+    summary.value = await getObservabilitySummary()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '首页信息加载失败'
+    error.value = err instanceof Error ? err.message : '系统观测信息加载失败'
   } finally {
     loading.value = false
   }
 }
 
-const scheduleStats = computed(() => summary.value?.schedule_run_stats ?? {
-  completed_24h: 0,
-  failed_24h: 0,
-  timed_out_24h: 0,
-  skipped_24h: 0,
-  partial_success_24h: 0,
-})
+const runtimeObservation = computed<Record<string, unknown>>(() => summary.value?.scheduler.runtime_observation ?? {})
+const recentRuns = computed<ScheduleRunRecord[]>(() => summary.value?.recent_schedule_runs ?? [])
+const recentEvents = computed(() => summary.value?.recent_events ?? [])
+const lockItems = computed(() => summary.value?.locks ?? [])
 
-const scheduler = computed(() => summary.value?.scheduler)
-const license = computed(() => summary.value?.license)
-const lockCount = computed(() => summary.value?.locks?.length ?? 0)
-const recentEvents = computed(() => summary.value?.recent_events?.slice(0, 6) ?? [])
-
-function fmtTime(value: string | null | undefined) {
+function fmtTime(value: unknown) {
   if (!value) return '-'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
+  const text = String(value)
+  const parsed = new Date(text)
+  return Number.isNaN(parsed.getTime()) ? text : parsed.toLocaleString()
+}
+
+function fmtDurationSec(value: unknown) {
+  const num = Number(value)
+  if (Number.isNaN(num)) return '-'
+  if (num < 1000) return `${num} ms`
+  return `${(num / 1000).toFixed(2)} s`
+}
+
+function fmtLockTtl(value: number | null | undefined) {
+  if (value == null) return '-'
+  return `${value.toFixed(1)} s`
+}
+
+function metricOf(run: ScheduleRunRecord, key: string) {
+  return run.metrics?.[key]
+}
+
+function eventMessage(details: Record<string, unknown>) {
+  const message = details?.message
+  if (typeof message === 'string' && message) return message
+  const skipped = details?.skipped_slots
+  if (Array.isArray(skipped) && skipped.length > 0) return `skipped slots: ${skipped.join(', ')}`
+  return '-'
 }
 
 onMounted(refresh)
 </script>
 
 <template>
-  <section class="home-page">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">Industrial Algorithm Operations Center</p>
-        <h1>工业智能算法运行与管控平台</h1>
-        <p class="subtitle">面向工厂试运行的一体化算法资产、调度执行、授权治理与运行观测中台。</p>
+  <section class="fui-obs-module">
+    <div class="module-header">
+      <div class="fui-title-box">
+        <h2>系统状态</h2>
+        <span>OBSERVABILITY</span>
       </div>
-      <div class="hero-actions">
-        <button class="primary" @click="refresh" :disabled="loading">{{ loading ? '刷新中…' : '刷新看板' }}</button>
-        <RouterLink class="secondary-link" to="/system/observability">系统总状态</RouterLink>
-      </div>
-    </header>
+      <button class="fui-btn-glow" @click="refresh" :disabled="loading">
+        {{ loading ? '同步中...' : '刷新状态' }}
+      </button>
+    </div>
 
-    <p v-if="error" class="banner error">{{ error }}</p>
+    <p v-if="error" class="fui-alert error">{{ error }}</p>
 
-    <section class="dashboard-grid">
-      <article class="metric-card">
-        <span>算法资产</span>
-        <strong>{{ packageCount }}</strong>
-        <small>已登记插件包总数</small>
-      </article>
-      <article class="metric-card">
-        <span>实例编排</span>
-        <strong>{{ instanceCount }}</strong>
-        <small>当前实例配置总数</small>
-      </article>
-      <article class="metric-card">
-        <span>运行记录</span>
-        <strong>{{ totalRunCount }}</strong>
-        <small>平台运行记录累计数</small>
-      </article>
-      <article class="metric-card">
-        <span>活跃锁</span>
-        <strong>{{ lockCount }}</strong>
-        <small>当前 Redis 实例锁数量</small>
-      </article>
-      <article class="metric-card status" :class="license?.valid ? 'ok' : 'warn'">
-        <span>许可证状态</span>
-        <strong>{{ license?.status || '-' }}</strong>
-        <small>{{ license?.message || '未加载授权状态' }}</small>
-      </article>
-      <article class="metric-card status" :class="scheduler?.thread_alive ? 'ok' : 'warn'">
-        <span>调度器状态</span>
-        <strong>{{ scheduler?.thread_alive ? 'ONLINE' : 'OFFLINE' }}</strong>
-        <small>模式：{{ scheduler?.mode || '-' }}</small>
-      </article>
-    </section>
-
-    <section class="panel-grid">
-      <article class="card wide-card">
-        <div class="card-head">
-          <h2>运行看板</h2>
-          <span>近 24h</span>
-        </div>
-        <div class="stats-grid">
-          <div class="stat success"><span>Completed</span><strong>{{ scheduleStats.completed_24h }}</strong></div>
-          <div class="stat warn"><span>Partial</span><strong>{{ scheduleStats.partial_success_24h }}</strong></div>
-          <div class="stat error"><span>Failed</span><strong>{{ scheduleStats.failed_24h }}</strong></div>
-          <div class="stat timeout"><span>Timed Out</span><strong>{{ scheduleStats.timed_out_24h }}</strong></div>
-          <div class="stat skipped"><span>Skipped</span><strong>{{ scheduleStats.skipped_24h }}</strong></div>
+    <div v-if="summary" class="fui-grid">
+      <article class="fui-panel">
+        <div class="panel-head">调度器核心状态</div>
+        <div class="fui-kv">
+          <div><span>模式</span><strong>{{ summary.scheduler.mode }}</strong></div>
+          <div><span>线程活跃</span><strong :class="{ 'text-ok': summary.scheduler.thread_alive }">{{ summary.scheduler.thread_alive ? 'ONLINE' : 'OFFLINE' }}</strong></div>
+          <div><span>Daemon PID</span><strong>{{ summary.scheduler.daemon_pid ?? '-' }}</strong></div>
+          <div><span>Worker ID</span><strong class="fui-mono">{{ summary.scheduler.worker_id }}</strong></div>
+          <div><span>运行时长</span><strong>{{ summary.scheduler.started_age_sec ?? 0 }} s</strong></div>
+          <div><span>Exit Code</span><strong>{{ summary.scheduler.daemon_exit_code ?? '-' }}</strong></div>
+          <div class="wide"><span>最近异常</span><strong class="text-err">{{ summary.scheduler.last_error || '无' }}</strong></div>
         </div>
       </article>
 
-      <article class="card wide-card">
-        <div class="card-head">
-          <h2>业务中台入口</h2>
-          <span>按场景进入</span>
-        </div>
-        <div class="center-grid">
-          <RouterLink class="center-card" to="/packages/upload">
-            <strong>插件上传</strong>
-            <p>上传、更新、校验插件包。</p>
-          </RouterLink>
-          <RouterLink class="center-card" to="/packages">
-            <strong>插件管理</strong>
-            <p>查看插件版本、摘要与资产清单。</p>
-          </RouterLink>
-          <RouterLink class="center-card" to="/data-sources">
-            <strong>数据源管理</strong>
-            <p>管理数据源连接与读写开关。</p>
-          </RouterLink>
-          <RouterLink class="center-card" to="/instances">
-            <strong>实例编排</strong>
-            <p>配置输入输出绑定、参数与定时计划。</p>
-          </RouterLink>
-          <RouterLink class="center-card" to="/runs">
-            <strong>运行监管</strong>
-            <p>查看运行状态、日志、写回与异常。</p>
-          </RouterLink>
-          <RouterLink class="center-card" to="/system/observability">
-            <strong>系统总状态</strong>
-            <p>查看调度器、锁、授权与近 24h 运行统计。</p>
-          </RouterLink>
+      <article class="fui-panel">
+        <div class="panel-head">运行频率监控</div>
+        <div class="fui-kv">
+          <div><span>Due Poll 次数</span><strong>{{ runtimeObservation.due_poll_count ?? 0 }}</strong></div>
+          <div><span>Claim 次数</span><strong>{{ runtimeObservation.claim_count ?? 0 }}</strong></div>
+          <div><span>Execute 次数</span><strong>{{ runtimeObservation.execute_count ?? 0 }}</strong></div>
+          <div><span>Complete 次数</span><strong>{{ runtimeObservation.complete_count ?? 0 }}</strong></div>
+          <div><span>Last Due 延迟</span><strong>{{ runtimeObservation.last_next_due_in_ms ?? '-' }} ms</strong></div>
+          <div><span>推荐轮询间隔</span><strong>{{ runtimeObservation.last_suggested_poll_interval_ms ?? '-' }} ms</strong></div>
+          <div class="wide"><span>最后轮询时间</span><strong>{{ fmtTime(runtimeObservation.last_due_poll_at) }}</strong></div>
         </div>
       </article>
 
-      <article class="card">
-        <div class="card-head">
-          <h2>调度与授权摘要</h2>
-          <span>系统关键状态</span>
-        </div>
-        <div class="kv-grid">
-          <div><span>调度模式</span><strong>{{ scheduler?.mode || '-' }}</strong></div>
-          <div><span>Daemon PID</span><strong>{{ scheduler?.daemon_pid ?? '-' }}</strong></div>
-          <div><span>最后错误</span><strong>{{ scheduler?.last_error || '-' }}</strong></div>
-          <div><span>授权类型</span><strong>{{ license?.grant_mode || '-' }}</strong></div>
-          <div><span>客户</span><strong>{{ license?.customer_name || '-' }}</strong></div>
-          <div><span>许可证 ID</span><strong>{{ license?.license_id || '-' }}</strong></div>
+      <article class="fui-panel wide-panel">
+        <div class="panel-head">分布式活跃锁 (Redis Locks)</div>
+        <div v-if="lockItems.length === 0" class="fui-empty">当前环境无活跃死锁或占位锁</div>
+        <div v-else class="fui-table-wrap">
+          <table class="fui-table">
+            <thead>
+              <tr><th>关联实例</th><th>TTL (生存时间)</th><th>Key 标识</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in lockItems" :key="item.key">
+                <td>{{ item.instance_id ?? '-' }}</td>
+                <td class="text-warn">{{ fmtLockTtl(item.ttl_sec) }}</td>
+                <td class="fui-mono">{{ item.key }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </article>
 
-      <article class="card">
-        <div class="card-head">
-          <h2>最近关键事件</h2>
-          <span>最新 6 条</span>
-        </div>
-        <div v-if="recentEvents.length === 0" class="empty">暂无关键事件</div>
-        <div v-else class="event-list">
-          <div v-for="item in recentEvents" :key="item.id" class="event-item">
-            <strong>{{ item.event_type }}</strong>
-            <span>{{ fmtTime(item.created_at) }}</span>
-            <p>{{ item.target_type }} / {{ item.target_id }}</p>
-          </div>
+      <article class="fui-panel wide-panel">
+        <div class="panel-head">定时调度快照 (Recent Runs)</div>
+        <div v-if="recentRuns.length === 0" class="fui-empty">暂无调度记录</div>
+        <div v-else class="fui-table-wrap">
+          <table class="fui-table">
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>实例</th>
+                <th>状态</th>
+                <th>开始时间</th>
+                <th>执行耗时</th>
+                <th>时间漂移</th>
+                <th>诊断日志</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="run in recentRuns.slice(0, 10)" :key="run.run_id">
+                <td class="fui-mono">{{ run.run_id.substring(0,8) }}...</td>
+                <td>{{ run.instance_id ?? '-' }}</td>
+                <td>
+                  <span :class="['fui-badge', run.status.toLowerCase()]">{{ run.status }}</span>
+                </td>
+                <td>{{ fmtTime(run.started_at) }}</td>
+                <td class="text-ok">{{ fmtDurationSec(metricOf(run, 'execution_wall_time_ms')) }}</td>
+                <td>{{ metricOf(run, 'drift_ms') ?? '-' }} ms</td>
+                <td class="text-err">{{ run.error?.message || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </article>
-    </section>
+      
+      <article class="fui-panel wide-panel">
+        <div class="panel-head">系统关键事件轨迹</div>
+        <div v-if="recentEvents.length === 0" class="fui-empty">暂无事件记录</div>
+        <div v-else class="fui-table-wrap">
+          <table class="fui-table">
+            <thead>
+              <tr><th>发生时间</th><th>事件类型</th><th>目标实体</th><th>详细说明</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in recentEvents" :key="item.id">
+                <td>{{ fmtTime(item.created_at) }}</td>
+                <td class="text-warn">{{ item.event_type }}</td>
+                <td class="fui-mono">{{ item.target_type }} / {{ item.target_id.substring(0,8) }}</td>
+                <td>{{ eventMessage(item.details) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.home-page { display: grid; gap: 20px; }
+.fui-obs-module { margin-top: 30px; }
+.module-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 1px solid rgba(0, 243, 255, 0.2); padding-bottom: 10px; }
+.fui-title-box h2 { margin: 0; color: #fff; font-size: 20px; letter-spacing: 1px; }
+.fui-title-box span { color: #00f3ff; font-size: 12px; letter-spacing: 2px; }
 
-/* 调整后的 Hero 区域，与 Header 风格统一 */
-.hero { 
-  display: flex; 
-  justify-content: space-between; 
-  gap: 20px; 
-  align-items: flex-end; 
-  background: linear-gradient(135deg, #ffffff 0%, #edf5f2 100%); /* 浅白到浅青绿渐变 */
-  border: 1px solid #d8e3df; /* 边框与 topbar 统一 */
-  border-radius: 18px; 
-  padding: 28px 32px; 
+.fui-btn-glow {
+  background: rgba(0, 243, 255, 0.1);
+  border: 1px solid #00f3ff;
+  color: #00f3ff;
+  padding: 8px 20px;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(0, 243, 255, 0.2) inset;
+  transition: 0.3s;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
 }
-.eyebrow { margin: 0 0 8px; color: #12685f; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
-.hero h1 { margin: 0 0 10px; font-size: 32px; color: #1f2f2c; }
-.subtitle { margin: 0; color: #5e6f6c; max-width: 760px; font-size: 14px; }
+.fui-btn-glow:hover { background: rgba(0, 243, 255, 0.3); box-shadow: 0 0 20px rgba(0, 243, 255, 0.6) inset; }
 
-.hero-actions { display: flex; gap: 12px; align-items: center; }
-.primary, .secondary-link { 
-  min-height: 40px; 
-  padding: 0 16px; 
-  border-radius: 8px; 
-  display: inline-flex; 
-  align-items: center; 
-  justify-content: center; 
-  text-decoration: none; 
-  cursor: pointer; 
-  font-weight: 600;
-  transition: all 0.2s ease;
+.fui-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.wide-panel { grid-column: 1 / -1; }
+
+.fui-panel {
+  background: rgba(2, 18, 38, 0.7);
+  border: 1px solid rgba(0, 162, 255, 0.3);
+  box-shadow: inset 0 0 20px rgba(0, 162, 255, 0.1);
+  position: relative;
+  padding: 20px;
 }
-/* 主按钮统一为品牌青绿色 */
-.primary { background: #12685f; color: #fff; border: 1px solid #12685f; }
-.primary:hover { background: #0e524b; border-color: #0e524b; }
-.primary:disabled { opacity: 0.7; cursor: not-allowed; }
-
-/* 次要按钮配合 Header 风格 */
-.secondary-link { background: #ffffff; color: #2f403d; border: 1px solid #bacac5; }
-.secondary-link:hover { background: #edf5f2; color: #12685f; }
-
-.banner.error { background: #fee2e2; color: #991b1b; padding: 12px 14px; border-radius: 8px; }
-
-.dashboard-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
-.metric-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px; display: grid; gap: 8px; }
-.metric-card span { color: #64748b; font-size: 13px; }
-.metric-card strong { font-size: 28px; color: #1f2f2c; }
-.metric-card small { color: #64748b; }
-.metric-card.status.ok { background: #f0fdf4; border-color: #bbf7d0; }
-.metric-card.status.warn { background: #fff7ed; border-color: #fed7aa; }
-
-.panel-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
-.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; }
-.wide-card { grid-column: 1 / -1; }
-.card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.card-head h2 { margin: 0; font-size: 18px; color: #1f2f2c; }
-.card-head span { color: #64748b; font-size: 13px; }
-
-.stats-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
-.stat { padding: 14px; border-radius: 10px; display: grid; gap: 6px; }
-.stat span { font-size: 12px; color: #475569; }
-.stat strong { font-size: 24px; }
-.stat.success { background: #dcfce7; color: #166534; }
-.stat.warn { background: #fef3c7; color: #92400e; }
-.stat.error { background: #fee2e2; color: #991b1b; }
-.stat.timeout { background: #e0f2fe; color: #0c4a6e; }
-.stat.skipped { background: #f1f5f9; color: #334155; }
-
-.center-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-/* 入口卡片也去除了突兀的蓝色调，调整为青绿灰风格 */
-.center-card { display: grid; gap: 8px; padding: 18px; border: 1px solid #d8e3df; border-radius: 12px; text-decoration: none; color: inherit; background: #fafcfb; transition: all 0.2s ease; }
-.center-card:hover { border-color: #9db8b1; background: #edf5f2; }
-.center-card strong { color: #1f2f2c; }
-.center-card p { margin: 0; color: #5e6f6c; font-size: 14px; }
-
-.kv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.kv-grid > div { display: grid; gap: 4px; padding: 12px; background: #f8fafc; border-radius: 8px; }
-.kv-grid span { color: #64748b; font-size: 12px; }
-.kv-grid strong { color: #1f2f2c; font-size: 14px; overflow-wrap: anywhere; }
-
-.event-list { display: grid; gap: 12px; }
-.event-item { padding: 14px; background: #f8fafc; border-radius: 10px; display: grid; gap: 6px; }
-.event-item strong { color: #1f2f2c; }
-.event-item span, .event-item p { color: #64748b; margin: 0; font-size: 13px; }
-.empty { padding: 18px; background: #f8fafc; border-radius: 8px; color: #64748b; }
-
-@media (max-width: 1200px) {
-  .dashboard-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .center-grid, .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .panel-grid { grid-template-columns: 1fr; }
+/* 科技感四个角 */
+.fui-panel::before, .fui-panel::after {
+  content: ''; position: absolute; width: 15px; height: 15px; border: 2px solid transparent;
 }
-@media (max-width: 900px) {
-  .hero, .hero-actions { display: grid; }
-  .dashboard-grid, .center-grid, .stats-grid, .kv-grid { grid-template-columns: 1fr; }
+.fui-panel::before { top: -1px; left: -1px; border-top-color: #00f3ff; border-left-color: #00f3ff; }
+.fui-panel::after { bottom: -1px; right: -1px; border-bottom-color: #00f3ff; border-right-color: #00f3ff; }
+
+.panel-head {
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.2) 0%, transparent 100%);
+  border-left: 4px solid #00f3ff;
+  padding: 6px 12px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 16px;
 }
+
+.fui-kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.fui-kv > div { padding: 10px; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(0, 243, 255, 0.1); display: grid; gap: 4px; }
+.fui-kv .wide { grid-column: 1 / -1; }
+.fui-kv span { color: #a0cfff; font-size: 12px; }
+.fui-kv strong { color: #fff; font-size: 14px; word-break: break-all; }
+
+.fui-table-wrap { overflow-x: auto; }
+.fui-table { width: 100%; border-collapse: collapse; }
+.fui-table th { background: rgba(0, 243, 255, 0.1); color: #00f3ff; padding: 12px; text-align: left; font-size: 13px; border-bottom: 1px solid #00f3ff; }
+.fui-table td { padding: 12px; color: #d0e8ff; border-bottom: 1px solid rgba(0, 243, 255, 0.1); font-size: 13px; }
+.fui-table tr:hover td { background: rgba(0, 243, 255, 0.05); }
+
+.fui-empty { padding: 20px; text-align: center; color: #a0cfff; font-style: italic; background: rgba(0, 0, 0, 0.2); }
+.fui-mono { font-family: "JetBrains Mono", Consolas, monospace; color: #a0cfff; }
+
+.text-ok { color: #00ffaa !important; text-shadow: 0 0 5px #00ffaa; }
+.text-warn { color: #ffbb00 !important; }
+.text-err { color: #ff4444 !important; }
+
+.fui-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+.fui-badge.completed { background: rgba(0, 255, 170, 0.2); border: 1px solid #00ffaa; color: #00ffaa; }
+.fui-badge.failed { background: rgba(255, 68, 68, 0.2); border: 1px solid #ff4444; color: #ff4444; }
+.fui-badge.running { background: rgba(0, 243, 255, 0.2); border: 1px solid #00f3ff; color: #00f3ff; }
 </style>
