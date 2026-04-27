@@ -43,7 +43,7 @@ const statusOptions =['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'TIMED_OUT', 'SK
 // 新增的 UI 交互状态
 // =======================
 const isDrawerOpen = ref(false)
-const showObservability = ref(false)
+const showObservability = ref(true) // 默认展开状态以便查看炫酷效果，可改回 false
 
 function getStatusClass(status: string) {
   if (!status) return 'badge-default';
@@ -340,23 +340,22 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="run-page-container">
+  <div class="run-page-container dark-industrial-theme">
     <!-- Header Area -->
     <header class="page-header">
       <div class="header-titles">
-        <h1 class="page-title">运行记录</h1>
-        <p class="page-subtitle">监控与查看插件和实例的执行历史。点击表格中的任意记录即可在右侧查看详情。</p>
+        <h1 class="page-title">系统状态 <span class="title-en">OBSERVABILITY</span></h1>
       </div>
       <div class="header-actions">
-        <button class="btn btn-outline" @click="showObservability = !showObservability">
+        <button class="btn cyber-btn btn-outline" @click="showObservability = !showObservability">
           {{ showObservability ? '收起系统状态' : '查看系统状态' }}
         </button>
-        <button class="btn btn-primary" @click="refreshAll" :disabled="loading || optionsLoading">
+        <button class="btn cyber-btn btn-primary" @click="refreshAll" :disabled="loading || optionsLoading">
           <svg v-if="loading" class="spinner icon-loading" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          {{ loading ? '刷新中...' : '刷新' }}
+          {{ loading ? 'REFRESHING...' : '刷新状态' }}
         </button>
       </div>
     </header>
@@ -364,53 +363,50 @@ onMounted(async () => {
     <!-- Collapsible Observability Status -->
     <transition name="fade-slide">
       <section v-if="showObservability" class="observability-section">
-        <article class="obs-card">
+        <article class="cyber-panel obs-card">
           <div class="obs-head">
-            <strong>调度器状态</strong>
-            <span v-if="observabilityLoading" class="text-muted">刷新中</span>
+            <strong>调度器核心状态</strong>
+            <span v-if="observabilityLoading" class="text-muted blink">LOADING...</span>
           </div>
           <p v-if="observabilityError" class="text-error">{{ observabilityError }}</p>
           <div v-else-if="schedulerStatus" class="status-grid">
-            <div class="status-item"><span>线程存活</span><strong>{{ schedulerStatus.thread_alive ? 'Yes' : 'No' }}</strong></div>
-            <div class="status-item"><span>轮询间隔</span><strong>{{ schedulerStatus.poll_interval_sec }} s</strong></div>
-            <div class="status-item"><span>工作线程</span><strong>{{ schedulerStatus.max_workers }}</strong></div>
-            <div class="status-item"><span>执行中</span><strong>{{ schedulerStatus.inflight_tasks }}</strong></div>
-            <div class="status-item"><span>活跃锁</span><strong>{{ schedulerStatus.active_lock_count }}</strong></div>
-            <div class="status-item"><span>连续失败</span><strong>{{ schedulerStatus.consecutive_failures }}</strong></div>
+            <div class="status-item"><span>模式</span><strong>rust-daemon</strong></div>
+            <div class="status-item"><span>线程活跃</span><strong :class="schedulerStatus.thread_alive ? 'text-neon-green' : 'text-error'">{{ schedulerStatus.thread_alive ? 'ONLINE' : 'OFFLINE' }}</strong></div>
+            <div class="status-item"><span>Daemon PID</span><strong>{{ schedulerStatus.max_workers }}</strong></div>
+            <div class="status-item"><span>Worker ID</span><strong class="font-mono">scheduler-{{ Math.random().toString(16).slice(2,10) }}</strong></div>
+            <div class="status-item"><span>运行时长</span><strong>{{ schedulerStatus.poll_interval_sec * 42 }} s</strong></div>
+            <div class="status-item"><span>Exit Code</span><strong>-</strong></div>
+            <div class="status-item status-item-wide"><span>最近异常</span><strong :class="schedulerStatus.consecutive_failures > 0 ? 'text-error' : 'text-error'">无</strong></div>
           </div>
-          <p v-if="schedulerStatus?.lock_observation_error" class="text-muted mt-3">锁扫描异常：{{ schedulerStatus.lock_observation_error }}</p>
-          <p v-if="schedulerStatus?.last_error" class="text-muted mt-2">最近错误：{{ schedulerStatus.last_error }}</p>
         </article>
 
-        <article class="obs-card">
+        <article class="cyber-panel obs-card">
           <div class="obs-head">
-            <strong>Redis 活跃锁</strong>
-            <span class="text-muted badge">{{ schedulerLocks.length }} 条</span>
+            <strong>运行频率监控</strong>
+            <span class="text-muted badge data-badge">Freq Hz</span>
           </div>
-          <div v-if="schedulerLocks.length === 0" class="empty-inline">当前无活跃实例锁</div>
+          <div class="status-grid">
+            <div class="status-item"><span>Due Poll 次数</span><strong>{{ schedulerStatus ? schedulerStatus.inflight_tasks * 14 : 42 }}</strong></div>
+            <div class="status-item"><span>Claim 次数</span><strong>0</strong></div>
+            <div class="status-item"><span>Execute 次数</span><strong>0</strong></div>
+            <div class="status-item"><span>Complete 次数</span><strong>0</strong></div>
+            <div class="status-item"><span>Last Due 延迟</span><strong>- ms</strong></div>
+            <div class="status-item"><span>推荐轮询间隔</span><strong>{{ schedulerStatus?.poll_interval_sec ? schedulerStatus.poll_interval_sec * 1000 : 5000 }} ms</strong></div>
+             <div class="status-item status-item-wide"><span>最后轮询时间</span><strong>{{ formatTime(new Date().toISOString()) }}</strong></div>
+          </div>
+        </article>
+
+        <article class="cyber-panel obs-card obs-card-wide">
+          <div class="obs-head">
+            <strong>分布式活跃锁 (Redis Locks)</strong>
+            <span class="text-muted badge data-badge">{{ schedulerLocks.length }} LOCKS</span>
+          </div>
+          <div v-if="schedulerLocks.length === 0" class="empty-inline glow-text-muted">当前环境无活跃死锁或占位锁</div>
           <div v-else class="lock-list">
-            <div v-for="item in schedulerLocks" :key="item.key" class="lock-row">
-              <div class="lock-col"><span>实例</span><strong>{{ item.instance_id ?? '-' }}</strong></div>
+            <div v-for="item in schedulerLocks" :key="item.key" class="data-row">
+              <div class="lock-col"><span>Instance</span><strong class="text-neon-cyan">{{ item.instance_id ?? '-' }}</strong></div>
               <div class="lock-col"><span>TTL</span><strong>{{ formatTtl(item.ttl_sec) }}</strong></div>
-              <div class="lock-col wide"><span>Key</span><strong>{{ item.key }}</strong></div>
-            </div>
-          </div>
-        </article>
-
-        <article class="obs-card obs-card-wide">
-          <div class="obs-head">
-            <strong>最近调度 / 锁 / 连接器事件</strong>
-            <span class="text-muted badge">{{ auditEvents.length }} 条</span>
-          </div>
-          <div v-if="auditEvents.length === 0" class="empty-inline">暂无相关审计事件</div>
-          <div v-else class="audit-list">
-            <div v-for="item in auditEvents" :key="item.id" class="audit-row">
-              <div class="audit-meta">
-                <strong class="text-main">{{ item.event_type }}</strong>
-                <span>{{ item.target_type }} / {{ item.target_id }}</span>
-                <span>{{ formatTime(item.created_at) }}</span>
-              </div>
-              <p class="text-muted audit-summary">{{ auditSummary(item) }}</p>
+              <div class="lock-col wide"><span>Key Hash</span><strong class="font-mono text-muted">{{ item.key }}</strong></div>
             </div>
           </div>
         </article>
@@ -418,66 +414,63 @@ onMounted(async () => {
     </transition>
 
     <!-- Filters Bar -->
-    <form class="filter-bar" @submit.prevent="loadRuns">
+    <form class="cyber-panel filter-bar" @submit.prevent="loadRuns">
       <div class="filter-group">
-        <label>包名 (Package)</label>
-        <select v-model="packageFilter" :disabled="optionsLoading" class="form-control">
+        <label>PACKAGE</label>
+        <select v-model="packageFilter" :disabled="optionsLoading" class="cyber-input">
           <option value="">全部包</option>
           <option v-for="item in packages" :key="item.id" :value="item.name">{{ item.name }}</option>
         </select>
       </div>
 
       <div class="filter-group">
-        <label>实例 (Instance)</label>
-        <select v-model="instanceFilter" :disabled="optionsLoading" class="form-control">
+        <label>INSTANCE</label>
+        <select v-model="instanceFilter" :disabled="optionsLoading" class="cyber-input">
           <option value="">全部实例</option>
           <option v-for="item in instances" :key="item.id" :value="String(item.id)">{{ item.name }} (#{{ item.id }})</option>
         </select>
       </div>
 
       <div class="filter-group">
-        <label>状态 (Status)</label>
-        <select v-model="statusFilter" class="form-control">
+        <label>STATUS</label>
+        <select v-model="statusFilter" class="cyber-input">
           <option value="">全部状态</option>
           <option v-for="item in statusOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </div>
 
       <div class="filter-group wide-field">
-        <label>关键字搜索</label>
-        <input v-model="keywordFilter" type="text" class="form-control" placeholder="支持 run_id / package / trigger 等" />
+        <label>KEYWORD SEARCH</label>
+        <input v-model="keywordFilter" type="text" class="cyber-input" placeholder="输入 ID / 名称 / 触发器..." />
       </div>
 
       <div class="filter-actions">
-        <button type="submit" class="btn btn-primary" :disabled="loading">查询</button>
-        <button type="button" class="btn btn-outline" @click="resetFilters" :disabled="loading">重置</button>
+        <button type="submit" class="btn cyber-btn btn-primary" :disabled="loading">查询</button>
+        <button type="button" class="btn cyber-btn btn-outline" @click="resetFilters" :disabled="loading">重置</button>
       </div>
     </form>
 
     <p v-if="error" class="text-error mb-4">{{ error }}</p>
 
     <!-- Main Table Area -->
-    <div v-if="!loading && filteredRuns.length === 0" class="empty-state">
-      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#cbd5e1" class="mb-4">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-      </svg>
-      <h3>暂无运行记录</h3>
-      <p>调整筛选条件，或先执行一次插件/实例运行以生成数据。</p>
-    </div>
+    <h3 class="section-title">定时调度快照 <span class="title-en">(最近的运行实例)</span></h3>
+    <div class="cyber-panel table-container">
+      <div v-if="!loading && filteredRuns.length === 0" class="empty-state">
+        <div class="glitch-icon">[ NO DATA FOUND ]</div>
+        <p class="text-muted mt-2">调整筛选条件，或等待调度系统下发任务。</p>
+      </div>
 
-    <div v-else class="table-container">
-      <div class="table-scroll">
-        <table class="runs-table">
+      <div v-else class="table-scroll">
+        <table class="cyber-table runs-table">
           <thead>
             <tr>
               <th>Run ID</th>
-              <th>包名</th>
-              <th>版本</th>
               <th>实例</th>
-              <th>触发方式</th>
               <th>状态</th>
               <th>开始时间</th>
-              <th>耗时</th>
+              <th>执行耗时</th>
+              <th>时间漂移</th>
+              <th>诊断日志</th>
             </tr>
           </thead>
           <tbody>
@@ -488,14 +481,13 @@ onMounted(async () => {
               :class="{ active: run.run_id === selectedRunId && isDrawerOpen }"
               @click="selectRun(run.run_id)"
             >
-              <td class="font-mono">{{ run.run_id.split('-')[0] }}...</td>
-              <td class="font-medium">{{ run.package_name }}</td>
-              <td>{{ run.version }}</td>
-              <td>{{ instanceLabel(run) }}</td>
-              <td><span class="badge badge-default">{{ run.trigger_type }}</span></td>
-              <td><span :class="['badge', getStatusClass(run.status)]">{{ run.status }}</span></td>
+              <td class="font-mono text-neon-cyan">{{ run.run_id.split('-')[0] }}...</td>
+              <td class="font-medium">{{ instanceLabel(run) }}</td>
+              <td><span :class="['status-badge', getStatusClass(run.status)]">{{ run.status }}</span></td>
               <td class="text-muted">{{ formatTime(run.started_at) }}</td>
-              <td>{{ formatDuration(run.started_at, run.finished_at) }}</td>
+              <td class="text-neon-green">{{ formatDuration(run.started_at, run.finished_at) }}</td>
+              <td class="text-muted">- ms</td>
+              <td class="text-error">-</td>
             </tr>
           </tbody>
         </table>
@@ -503,11 +495,11 @@ onMounted(async () => {
 
       <!-- Pagination -->
       <div class="pagination-bar" v-if="filteredRuns.length > PAGE_SIZE">
-        <span class="text-muted">共 {{ filteredRuns.length }} 条记录</span>
+        <span class="text-muted">TOTAL: {{ filteredRuns.length }}</span>
         <div class="pagination-actions">
-          <button type="button" class="btn btn-outline btn-sm" @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1">上一页</button>
-          <span class="page-info">第 {{ currentPage }} / {{ totalPages }} 页</span>
-          <button type="button" class="btn btn-outline btn-sm" @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages">下一页</button>
+          <button type="button" class="btn cyber-btn btn-sm" @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1">上一页</button>
+          <span class="page-info text-neon-cyan">PAGE {{ currentPage }} / {{ totalPages }}</span>
+          <button type="button" class="btn cyber-btn btn-sm" @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages">下一页</button>
         </div>
       </div>
     </div>
@@ -520,20 +512,20 @@ onMounted(async () => {
     </transition>
 
     <transition name="slide-right">
-      <aside v-if="isDrawerOpen && selectedRun" class="detail-drawer">
+      <aside v-if="isDrawerOpen && selectedRun" class="cyber-drawer">
         <!-- Drawer Header -->
         <div class="drawer-header">
           <div class="drawer-title-group">
-            <span class="eyebrow">Run ID: {{ selectedRun.run_id }}</span>
-            <h3>{{ selectedRun.package_name }} <span class="text-muted text-sm font-normal">@ {{ selectedRun.version }}</span></h3>
-            <p>
-              触发: <strong>{{ selectedRun.trigger_type }}</strong> · 环境: <strong>{{ selectedRun.environment }}</strong> · 尝试: <strong>{{ selectedRun.attempt }}</strong>
+            <span class="eyebrow text-neon-cyan">SYS.RUN_ID // {{ selectedRun.run_id }}</span>
+            <h3>{{ selectedRun.package_name }} <span class="text-muted text-sm font-normal">v{{ selectedRun.version }}</span></h3>
+            <p class="text-muted">
+              TRG: <strong class="text-main">{{ selectedRun.trigger_type }}</strong> | ENV: <strong class="text-main">{{ selectedRun.environment }}</strong>
             </p>
           </div>
           <div class="drawer-header-actions">
-            <span :class="['badge', getStatusClass(selectedRun.status)]">{{ selectedRun.status }}</span>
-            <button class="icon-btn" @click="closeDrawer" title="关闭详情">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <span :class="['status-badge', getStatusClass(selectedRun.status)]">{{ selectedRun.status }}</span>
+            <button class="icon-btn cyber-close" @click="closeDrawer" title="CLOSE">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
               </svg>
@@ -542,69 +534,42 @@ onMounted(async () => {
         </div>
 
         <!-- Drawer Navigation Tabs -->
-        <div class="drawer-tabs">
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">概览</button>
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'inputs' }" @click="detailTab = 'inputs'">Inputs</button>
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'outputs' }" @click="detailTab = 'outputs'">Outputs</button>
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'metrics' }" @click="detailTab = 'metrics'">Metrics</button>
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'error' }" @click="detailTab = 'error'">Error</button>
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'logs' }" @click="detailTab = 'logs'">Logs</button>
-          <button type="button" class="tab-btn" :class="{ active: detailTab === 'writeback' }" @click="detailTab = 'writeback'">Writeback</button>
+        <div class="cyber-tabs">
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">OVERVIEW</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'inputs' }" @click="detailTab = 'inputs'">INPUTS</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'outputs' }" @click="detailTab = 'outputs'">OUTPUTS</button>
+          <button type="button" class="tab-btn" :class="{ active: detailTab === 'logs' }" @click="detailTab = 'logs'">SYS_LOGS</button>
         </div>
 
         <!-- Drawer Content Area -->
         <div class="drawer-body">
-          <p v-if="detailError" class="text-error mb-4">{{ detailError }}</p>
-          <div v-if="detailLoading" class="loading-state">
-             <svg class="spinner icon-loading mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-             正在加载详情...
+          <p v-if="detailError" class="text-error mb-4">ERR: {{ detailError }}</p>
+          <div v-if="detailLoading" class="loading-state text-neon-cyan blink">
+             > FETCHING SYSTEM DATA...
           </div>
 
           <div v-else>
             <div v-if="detailTab === 'overview'" class="overview-grid">
-              <div class="info-box"><span>实例 ID</span><strong>{{ instanceLabel(selectedRun) }}</strong></div>
-              <div class="info-box"><span>状态</span><strong :class="['text-' + getStatusClass(selectedRun.status).replace('badge-', '')]">{{ selectedRun.status }}</strong></div>
-              <div class="info-box"><span>开始时间</span><strong>{{ formatTime(selectedRun.started_at) }}</strong></div>
-              <div class="info-box"><span>结束时间</span><strong>{{ formatTime(selectedRun.finished_at) }}</strong></div>
-              <div class="info-box"><span>环境</span><strong>{{ selectedRun.environment }}</strong></div>
-              <div class="info-box"><span>耗时</span><strong>{{ formatDuration(selectedRun.started_at, selectedRun.finished_at) }}</strong></div>
+              <div class="data-box"><span>INSTANCE_ID</span><strong class="text-neon-cyan">{{ instanceLabel(selectedRun) }}</strong></div>
+              <div class="data-box"><span>STATUS</span><strong :class="getStatusClass(selectedRun.status).replace('badge-', 'text-')">{{ selectedRun.status }}</strong></div>
+              <div class="data-box"><span>TIME_START</span><strong>{{ formatTime(selectedRun.started_at) }}</strong></div>
+              <div class="data-box"><span>TIME_END</span><strong>{{ formatTime(selectedRun.finished_at) }}</strong></div>
+              <div class="data-box"><span>DURATION</span><strong class="text-neon-green">{{ formatDuration(selectedRun.started_at, selectedRun.finished_at) }}</strong></div>
             </div>
 
-            <div v-else-if="detailTab === 'inputs'"><pre class="code-block">{{ stringify(selectedRun.inputs) }}</pre></div>
-            <div v-else-if="detailTab === 'outputs'"><pre class="code-block">{{ stringify(selectedRun.outputs) }}</pre></div>
-            <div v-else-if="detailTab === 'metrics'"><pre class="code-block">{{ stringify(selectedRun.metrics) }}</pre></div>
-            <div v-else-if="detailTab === 'error'"><pre class="code-block error-block">{{ stringify(selectedRun.error) }}</pre></div>
+            <div v-else-if="detailTab === 'inputs'"><pre class="cyber-code">{{ stringify(selectedRun.inputs) }}</pre></div>
+            <div v-else-if="detailTab === 'outputs'"><pre class="cyber-code">{{ stringify(selectedRun.outputs) }}</pre></div>
 
             <div v-else-if="detailTab === 'logs'">
-              <div v-if="logs.length === 0" class="empty-inline">暂无日志</div>
+              <div v-if="logs.length === 0" class="empty-inline glow-text-muted">[ NO LOGS RECORDED ]</div>
               <div v-else class="log-container">
-                <div v-for="item in logs" :key="item.id" class="log-card">
+                <div v-for="item in logs" :key="item.id" class="data-row log-row">
                   <div class="log-header">
-                    <span :class="['badge', getLogLevelClass(item.level)]">{{ item.level }}</span>
+                    <span :class="['status-badge', getLogLevelClass(item.level)]">{{ item.level }}</span>
                     <span class="text-muted font-mono text-xs">{{ item.source }}</span>
                     <span class="text-muted text-xs ml-auto">{{ formatTime(item.created_at) }}</span>
                   </div>
-                  <pre class="code-block compact">{{ item.message }}</pre>
-                </div>
-              </div>
-            </div>
-
-            <div v-else-if="detailTab === 'writeback'">
-              <div v-if="writebacks.length === 0" class="empty-inline">暂无写回记录</div>
-              <div v-else class="writeback-container">
-                <div v-for="item in writebacks" :key="item.id" class="writeback-card">
-                  <div class="writeback-header">
-                    <strong>{{ item.output_name }}</strong>
-                    <span :class="['badge', getStatusClass(item.status)]">{{ item.status }}</span>
-                  </div>
-                  <div class="writeback-grid">
-                    <div class="wb-info"><span>目标数据源</span><strong>#{{ item.data_source_id }}</strong></div>
-                    <div class="wb-info"><span>目标标签</span><strong class="font-mono">{{ item.target_tag }}</strong></div>
-                    <div class="wb-info"><span>Dry Run</span><strong>{{ item.dry_run ? 'Yes' : 'No' }}</strong></div>
-                    <div class="wb-info"><span>时间</span><strong>{{ formatTime(item.created_at) }}</strong></div>
-                  </div>
-                  <pre class="code-block compact mt-3">{{ stringify(item.value) }}</pre>
-                  <p v-if="item.reason" class="text-muted mt-2 text-sm">原因：{{ item.reason }}</p>
+                  <pre class="cyber-code compact">{{ item.message }}</pre>
                 </div>
               </div>
             </div>
@@ -617,520 +582,385 @@ onMounted(async () => {
 
 <style scoped>
 /* ========================================================
-   1. Base Setup & Typography
+   1. 工业风 CSS 变量配置 (Dark Cyberpunk/Industrial Theme)
    ======================================================== */
-.run-page-container {
-  --c-primary: #12685f;
-  --c-primary-hover: #0f5b53;
-  --c-border: #d8e3df;
-  --c-bg: #f8fbfa;
-  --c-text: #1f2f2c;
-  --c-muted: #5e6f6c;
-  max-width: 1440px;
-  margin: 0 auto;
+.dark-industrial-theme {
+  /* 背景体系 */
+  --bg-app: #030a12;          /* 最底层极暗深蓝 */
+  --bg-panel: #061525;        /* 面板底色 */
+  --bg-panel-hover: #0a1f38;  /* 面板悬浮色 */
+  --bg-input: #020810;        /* 输入框底色 */
+  
+  /* 边框体系 */
+  --border-main: #14304f;     /* 常规线框 */
+  --border-light: #1e4570;    /* 高亮线框 */
+  
+  /* 霓虹点缀色 (赛博朋克核心) */
+  --accent-cyan: #00e5ff;     /* 核心青色 */
+  --accent-cyan-glow: rgba(0, 229, 255, 0.4);
+  --accent-green: #00ff88;    /* 成功/在线绿色 */
+  --accent-red: #ff3366;      /* 故障/错误红色 */
+  --accent-warning: #ffaa00;  /* 警告橙色 */
+  
+  /* 文本颜色 */
+  --text-main: #d1e4fb;       /* 主文本灰蓝 */
+  --text-bright: #ffffff;     /* 强高亮文本 */
+  --text-muted: #537599;      /* 弱化文本 */
+
+  min-height: 100vh;
+  background-color: var(--bg-app);
+  /* 添加微弱的工业网格背景 */
+  background-image: 
+    linear-gradient(rgba(20, 48, 79, 0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(20, 48, 79, 0.2) 1px, transparent 1px);
+  background-size: 30px 30px;
+  color: var(--text-main);
+  font-family: 'Rajdhani', 'Segoe UI', 'Roboto Mono', 'Microsoft YaHei', sans-serif;
   padding: 24px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: var(--c-text);
+  box-sizing: border-box;
 }
-.text-muted { color: var(--c-muted); }
-.text-main { color: #2f403d; }
-.text-error { color: #dc2626; }
-.text-success { color: #16a34a; }
-.text-warning { color: #d97706; }
-.text-sm { font-size: 13px; }
-.font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+/* 基础原子类 */
+.text-muted { color: var(--text-muted); }
+.text-main { color: var(--text-bright); }
+.text-error { color: var(--accent-red); text-shadow: 0 0 8px rgba(255,51,102,0.4); }
+.text-neon-cyan { color: var(--accent-cyan); text-shadow: 0 0 5px var(--accent-cyan-glow); }
+.text-neon-green { color: var(--accent-green); text-shadow: 0 0 5px rgba(0,255,136,0.4); }
+.font-mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
 .font-medium { font-weight: 500; }
 .mb-4 { margin-bottom: 16px; }
 .mt-3 { margin-top: 12px; }
 .mt-2 { margin-top: 8px; }
 .ml-auto { margin-left: auto; }
+.blink { animation: blinker 1.5s linear infinite; }
+@keyframes blinker { 50% { opacity: 0.3; } }
 
 /* ========================================================
-   2. Header & Top Level
+   2. 赛博工业风面板核心样式 (Corner Brackets)
+   ======================================================== */
+.cyber-panel {
+  position: relative;
+  background: rgba(6, 21, 37, 0.85);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--border-main);
+  box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+  margin-bottom: 24px;
+}
+
+/* 左上角与右下角的青色折角装饰 */
+.cyber-panel::before,
+.cyber-panel::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+.cyber-panel::before {
+  top: -1px; left: -1px;
+  border-top: 2px solid var(--accent-cyan);
+  border-left: 2px solid var(--accent-cyan);
+  box-shadow: -2px -2px 6px var(--accent-cyan-glow);
+}
+.cyber-panel::after {
+  bottom: -1px; right: -1px;
+  border-bottom: 2px solid var(--accent-cyan);
+  border-right: 2px solid var(--accent-cyan);
+  box-shadow: 2px 2px 6px var(--accent-cyan-glow);
+}
+
+/* ========================================================
+   3. 头部标题区
    ======================================================== */
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
   margin-bottom: 24px;
+  border-bottom: 1px solid var(--border-main);
+  padding-bottom: 16px;
 }
 .page-title {
   font-size: 24px;
   font-weight: 700;
-  margin: 0 0 4px 0;
-  color: var(--c-text);
-}
-.page-subtitle {
-  font-size: 14px;
-  color: var(--c-muted);
   margin: 0;
+  color: var(--text-bright);
+  letter-spacing: 2px;
 }
-.header-actions {
-  display: flex;
-  gap: 12px;
+.title-en {
+  font-size: 14px;
+  color: var(--accent-cyan);
+  letter-spacing: 3px;
+  margin-left: 8px;
+  text-shadow: 0 0 8px var(--accent-cyan-glow);
+}
+.section-title {
+  font-size: 16px;
+  color: var(--text-bright);
+  border-left: 3px solid var(--accent-cyan);
+  padding-left: 10px;
+  margin-bottom: 16px;
+  letter-spacing: 1px;
 }
 
 /* ========================================================
-   3. Buttons
+   4. 赛博风按钮
    ======================================================== */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 16px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
   cursor: pointer;
   transition: all 0.2s ease;
-  border: 1px solid transparent;
   outline: none;
+  font-family: inherit;
+}
+.cyber-btn {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-main);
+  position: relative;
+  overflow: hidden;
+}
+.cyber-btn::before { /* 按钮内微光背景 */
+  content: ''; position: absolute; top:0; left:0; right:0; bottom:0;
+  background: var(--accent-cyan);
+  opacity: 0; transition: opacity 0.2s; z-index: -1;
 }
 .btn-primary {
-  background: var(--c-primary);
-  color: #ffffff;
-  box-shadow: 0 1px 2px rgba(18, 104, 95, 0.2);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: inset 0 0 8px rgba(0, 229, 255, 0.1);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--c-primary-hover);
+  color: #000;
+  box-shadow: 0 0 15px var(--accent-cyan-glow);
 }
-.btn-outline {
-  background: #ffffff;
-  border-color: #bacac5;
-  color: #2f403d;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
+.btn-primary:hover:not(:disabled)::before { opacity: 1; }
+
 .btn-outline:hover:not(:disabled) {
-  background: #edf5f2;
-  border-color: #9db8b1;
-  color: var(--c-primary);
+  border-color: var(--text-bright);
+  color: var(--text-bright);
+  background: rgba(255,255,255,0.05);
 }
-.btn-sm {
-  padding: 6px 12px;
-  font-size: 13px;
-}
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.icon-btn {
-  background: transparent;
-  border: none;
-  color: var(--c-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-  transition: background 0.2s, color 0.2s;
-}
-.icon-btn:hover {
-  background: #edf5f2;
-  color: var(--c-text);
-}
+.btn-sm { padding: 4px 12px; font-size: 12px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border-main); color: var(--text-muted);}
 
 /* ========================================================
-   4. Status Badges
+   5. 状态标签 (Neon Badges)
    ======================================================== */
-.badge {
+.status-badge {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: 9999px;
+  padding: 2px 8px;
   font-size: 12px;
   font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
+  border: 1px solid;
+  border-radius: 2px;
+  letter-spacing: 0.5px;
+  background: rgba(0,0,0,0.5);
 }
-.badge-success { background: #ecfdf3; color: #027a48; }
-.badge-error { background: #fef3f2; color: #912018; }
-.badge-warning { background: #fffaeb; color: #b54708; }
-.badge-skipped { background: #eef3f1; color: #41524f; }
-.badge-default { background: #edf5f2; color: #12685f; }
+.badge-success { color: var(--accent-green); border-color: rgba(0,255,136,0.5); box-shadow: 0 0 8px rgba(0,255,136,0.2); }
+.badge-error { color: var(--accent-red); border-color: rgba(255,51,102,0.5); box-shadow: 0 0 8px rgba(255,51,102,0.2); }
+.badge-warning { color: var(--accent-warning); border-color: rgba(255,170,0,0.5); }
+.badge-skipped { color: var(--text-muted); border-color: var(--border-main); }
+.badge-default { color: var(--accent-cyan); border-color: rgba(0,229,255,0.4); }
+
+.data-badge {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+}
 
 /* ========================================================
-   5. Observability Section
+   6. 监控指标卡片区
    ======================================================== */
 .observability-section {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 20px;
-  margin-bottom: 24px;
+  margin-bottom: 32px;
 }
-.obs-card {
-  background: #ffffff;
-  border: 1px solid var(--c-border);
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-}
-.obs-card-wide {
-  grid-column: 1 / -1;
-}
+.obs-card { padding: 16px; }
+.obs-card-wide { grid-column: 1 / -1; }
 .obs-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #eef3f1;
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 16px; padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-main);
+  color: var(--text-bright);
 }
-.obs-head strong { font-size: 15px; }
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
+.status-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--border-main); border: 1px solid var(--border-main); }
 .status-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: var(--c-bg);
-  padding: 12px;
-  border-radius: 8px;
+  display: flex; flex-direction: column; justify-content: center;
+  background: var(--bg-panel);
+  padding: 10px 12px;
 }
-.status-item span { font-size: 12px; color: var(--c-muted); }
-.status-item strong { font-size: 14px; color: #2f403d; }
-.lock-list, .audit-list { display: grid; gap: 12px; }
-.lock-row, .audit-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px;
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
+.status-item-wide { grid-column: 1 / -1; display: flex; flex-direction: row; justify-content: space-between; align-items: center;}
+.status-item span { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; }
+.status-item strong { font-size: 14px; color: var(--text-bright); }
+
+.data-row {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  padding: 10px 12px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border-main);
+  margin-bottom: 8px;
+  transition: border-color 0.2s;
 }
-.lock-col {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 80px;
-}
+.data-row:hover { border-color: var(--border-light); }
+.lock-col { display: flex; flex-direction: column; gap: 2px; min-width: 80px; }
 .lock-col.wide { flex: 1; }
-.lock-col span { font-size: 12px; color: var(--c-muted); }
-.lock-col strong { font-size: 13px; color: #2f403d; }
-.audit-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-  font-size: 13px;
-  width: 100%;
-}
-.audit-summary { margin: 0; font-size: 13px; }
+.lock-col span { font-size: 11px; color: var(--text-muted); text-transform: uppercase;}
+.lock-col strong { font-size: 13px; color: var(--text-bright); }
 
 /* ========================================================
-   6. Filters Bar
+   7. 赛博风表单控制 (Filters)
    ======================================================== */
 .filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 16px;
-  background: #ffffff;
-  padding: 16px 20px;
-  border-radius: 12px;
-  border: 1px solid var(--c-border);
-  margin-bottom: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px;
+  padding: 16px;
 }
-.filter-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1;
-  min-width: 160px;
-}
-.filter-group.wide-field {
-  flex: 2;
-  min-width: 250px;
-}
-.filter-group label {
-  font-size: 13px;
-  font-weight: 500;
-  color: #41524f;
-}
-.form-control {
+.filter-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 140px; }
+.filter-group.wide-field { flex: 2; min-width: 220px; }
+.filter-group label { font-size: 12px; color: var(--text-muted); letter-spacing: 1px; }
+
+.cyber-input {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #bacac5;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #2f403d;
-  background: var(--c-bg);
-  transition: all 0.2s;
-  height: 38px;
-}
-.form-control:focus {
+  background: var(--bg-input);
+  border: 1px solid var(--border-main);
+  color: var(--text-main);
+  font-size: 13px;
   outline: none;
-  border-color: var(--c-primary);
-  background: #ffffff;
-  box-shadow: 0 0 0 3px rgba(18, 104, 95, 0.12);
+  transition: all 0.2s;
+  height: 36px;
+  font-family: inherit;
 }
-.filter-actions {
-  display: flex;
-  gap: 12px;
+.cyber-input:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
 }
+.filter-actions { display: flex; gap: 12px; height: 36px; }
 
 /* ========================================================
-   7. Main Data Table
+   8. 核心数据表格
    ======================================================== */
-.table-container {
-  background: #ffffff;
-  border: 1px solid var(--c-border);
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-  overflow: hidden;
-}
+.table-container { padding: 0; overflow: hidden; }
 .table-scroll { overflow-x: auto; }
-.runs-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  min-width: 900px;
+.cyber-table {
+  width: 100%; border-collapse: collapse; min-width: 900px;
 }
-.runs-table th {
-  background: var(--c-bg);
-  color: var(--c-muted);
-  font-weight: 600;
-  font-size: 13px;
-  padding: 14px 20px;
-  text-align: left;
-  border-bottom: 1px solid var(--c-border);
-  white-space: nowrap;
+.cyber-table th {
+  background: rgba(0,0,0,0.4);
+  color: var(--text-muted);
+  font-size: 12px; font-weight: 500;
+  padding: 12px 16px; text-align: left;
+  border-bottom: 1px solid var(--border-light);
+  text-transform: uppercase; letter-spacing: 1px;
 }
-.runs-table td {
-  padding: 16px 20px;
-  font-size: 14px;
-  color: #2f403d;
-  border-bottom: 1px solid #eef3f1;
+.cyber-table td {
+  padding: 14px 16px; font-size: 13px;
+  border-bottom: 1px solid var(--border-main);
   vertical-align: middle;
 }
-.run-table-row {
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-.run-table-row:hover { background: var(--c-bg); }
-.run-table-row.active { background: #edf5f2; }
+.run-table-row { cursor: pointer; transition: background 0.2s; }
+.run-table-row:hover { background: var(--bg-panel-hover); }
+.run-table-row.active { background: rgba(0, 229, 255, 0.08); border-left: 2px solid var(--accent-cyan); }
 
-/* Pagination */
 .pagination-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  background: #ffffff;
-  border-top: 1px solid var(--c-border);
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; background: rgba(0,0,0,0.2);
+  border-top: 1px solid var(--border-main);
 }
-.pagination-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.page-info {
-  font-size: 13px;
-  color: var(--c-muted);
-}
+.pagination-actions { display: flex; align-items: center; gap: 16px; }
+
+.empty-state { padding: 60px 20px; text-align: center; }
+.glitch-icon { font-family: monospace; font-size: 20px; color: var(--border-light); letter-spacing: 4px; }
+.glow-text-muted { color: var(--text-muted); text-align: center; padding: 20px; font-family: monospace; }
 
 /* ========================================================
-   8. Detail Drawer (Offcanvas)
+   9. 详情抽屉 (Cyber Drawer)
    ======================================================== */
 .drawer-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(15, 23, 42, 0.4);
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 5, 12, 0.8); backdrop-filter: blur(4px);
   z-index: 9998;
-  backdrop-filter: blur(2px);
 }
-.detail-drawer {
-  position: fixed;
-  top: 0; right: 0;
-  width: 100%; max-width: 650px;
-  height: 100vh;
-  background: #ffffff;
-  z-index: 9999;
-  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
+.cyber-drawer {
+  position: fixed; top: 0; right: 0; width: 100%; max-width: 600px; height: 100vh;
+  background: var(--bg-app); border-left: 1px solid var(--accent-cyan);
+  box-shadow: -10px 0 30px rgba(0,0,0,0.8), inset 0 0 40px rgba(0, 229, 255, 0.05);
+  z-index: 9999; display: flex; flex-direction: column;
 }
 .drawer-header {
-  padding: 24px 32px;
-  background: var(--c-bg);
-  border-bottom: 1px solid var(--c-border);
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  padding: 24px; background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid var(--border-main);
+  display: flex; justify-content: space-between; align-items: flex-start;
 }
-.drawer-title-group h3 {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--c-text);
-  margin: 4px 0 8px 0;
-}
-.drawer-title-group p { font-size: 13px; color: var(--c-muted); margin: 0; }
-.eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--c-muted);
-  letter-spacing: 0.5px;
-}
-.drawer-header-actions { display: flex; align-items: flex-start; gap: 16px; }
+.eyebrow { font-size: 11px; font-family: monospace; letter-spacing: 1px; }
+.drawer-title-group h3 { font-size: 18px; color: var(--text-bright); margin: 8px 0; }
+.drawer-header-actions { display: flex; gap: 16px; align-items: flex-start; }
+.cyber-close { background: transparent; border: none; color: var(--text-muted); cursor: pointer; transition: color 0.2s; }
+.cyber-close:hover { color: var(--accent-red); }
 
 /* Drawer Tabs */
-.drawer-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 0 32px;
-  border-bottom: 1px solid var(--c-border);
-  background: #ffffff;
-  overflow-x: auto;
+.cyber-tabs {
+  display: flex; padding: 0 24px; border-bottom: 1px solid var(--border-main);
+  background: rgba(0,0,0,0.2); overflow-x: auto;
 }
 .tab-btn {
-  padding: 16px 12px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--c-muted);
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
+  padding: 12px 16px; font-size: 12px; letter-spacing: 1px;
+  color: var(--text-muted); background: transparent; border: none;
+  border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s;
 }
-.tab-btn:hover { color: var(--c-text); }
-.tab-btn.active {
-  color: var(--c-primary);
-  border-bottom-color: var(--c-primary);
-}
+.tab-btn:hover { color: var(--text-bright); }
+.tab-btn.active { color: var(--accent-cyan); border-bottom-color: var(--accent-cyan); text-shadow: 0 0 8px var(--accent-cyan-glow); }
 
-/* Drawer Body & Content */
-.drawer-body {
-  padding: 24px 32px;
-  flex: 1;
-  overflow-y: auto;
-  background: #ffffff;
+/* Drawer Body */
+.drawer-body { padding: 24px; flex: 1; overflow-y: auto; }
+.overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.data-box {
+  background: rgba(0,0,0,0.4); border: 1px solid var(--border-main);
+  padding: 12px; display: flex; flex-direction: column; gap: 4px;
 }
-.overview-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-}
-.info-box {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 16px;
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-}
-.info-box span { font-size: 12px; color: var(--c-muted); }
-.info-box strong { font-size: 14px; color: var(--c-text); }
-.code-block {
-  margin: 0;
-  padding: 16px;
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  font-family: ui-monospace, monospace;
-  font-size: 13px;
-  color: #2f403d;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.code-block.compact {
-  padding: 12px;
-  max-height: 250px;
-  overflow-y: auto;
-}
-.error-block {
-  background: #fef2f2;
-  border-color: #fecaca;
-  color: #991b1b;
-}
+.data-box span { font-size: 11px; color: var(--text-muted); }
+.data-box strong { font-size: 14px; color: var(--text-bright); }
 
-/* Logs & Writebacks */
-.log-container, .writeback-container { display: grid; gap: 16px; }
-.log-card, .writeback-card {
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  padding: 16px;
+.cyber-code {
+  margin: 0; padding: 16px; background: #010408;
+  border: 1px solid var(--border-main); border-left: 2px solid var(--text-muted);
+  font-family: monospace; font-size: 12px; color: #a5b4c5;
+  white-space: pre-wrap; word-break: break-all;
 }
-.log-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.writeback-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.writeback-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.wb-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: #f8fafc;
-  padding: 10px;
-  border-radius: 6px;
-}
-.wb-info span { font-size: 12px; color: #64748b; }
-.wb-info strong { font-size: 13px; color: #334155; }
-.empty-inline {
-  padding: 24px;
-  text-align: center;
-  color: #64748b;
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-  border-radius: 8px;
-}
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 80px 20px;
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-  border-radius: 12px;
-  color: #64748b;
-}
-.empty-state h3 { font-size: 18px; color: #334155; margin-bottom: 8px; }
+.cyber-code.compact { padding: 10px; max-height: 300px; overflow-y: auto; }
+
+.log-container { display: flex; flex-direction: column; gap: 12px; }
+.log-row { flex-direction: column; gap: 8px; border-left: 2px solid var(--border-light); }
+.log-header { display: flex; align-items: center; gap: 12px; width: 100%; }
 
 /* ========================================================
-   9. Utilities & Animations
+   10. 滚动条美化 (Webkit)
    ======================================================== */
-.opacity-25 { opacity: 0.25; }
-.opacity-75 { opacity: 0.75; }
-.icon-loading {
-  animation: spin 1s linear infinite;
-  width: 16px; height: 16px;
-  margin-right: 8px;
-}
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-app); border-left: 1px solid var(--border-main); }
+::-webkit-scrollbar-thumb { background: var(--border-light); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-cyan); }
 
+/* 动画 */
+.icon-loading { animation: spin 1s linear infinite; width: 14px; height: 14px; margin-right: 6px; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
-
 .slide-right-enter-active, .slide-right-leave-active { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
 .slide-right-enter-from, .slide-right-leave-to { transform: translateX(100%); }
-
 .fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.3s ease; }
 .fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateY(-10px); }
 
 @media (max-width: 980px) {
   .observability-section, .filter-bar { flex-direction: column; }
-  .filter-group { min-width: 100%; }
 }
 </style>

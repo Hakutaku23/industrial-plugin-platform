@@ -2036,10 +2036,11 @@ onUnmounted(() => {
   --transition-all: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 
   width: 100%;
+  max-width: none !important;
   min-height: 100vh;
   box-sizing: border-box;
-  padding: 24px 12px;
-  margin: 0 auto;
+  padding: 24px;
+  margin: 0;
   font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--color-text-main);
   

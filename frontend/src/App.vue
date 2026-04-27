@@ -1,25 +1,46 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue' // 新增 onMounted, onUnmounted
 import { useRoute, useRouter, RouterLink, RouterView } from 'vue-router'
-import { useAuthStore } from './stores/auth' // 确保路径正确
+import { useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-// 判断是否显示登录页
 const showLoginPage = computed(() => route.path === '/login')
-
-// 权限校验函数
 const can = (permission: string) => auth.can(permission)
 
-// 退出登录逻辑
 async function signOut() {
   await auth.signOut()
   if (auth.securityEnabled) {
     await router.replace('/login')
   }
 }
+
+// ========== 新增：屏幕自适应逻辑 ==========
+// 你的屏幕是 1920，以此为基准。在 1920 下 1rem = 16px
+const designWidth = 1920; 
+const baseFontSize = 16; 
+
+const setRem = () => {
+  // 获取当前屏幕的宽度
+  const clientWidth = document.documentElement.clientWidth || window.innerWidth;
+  // 计算缩放比例 (比如 4K屏 3840/1920 = 2)
+  const scale = clientWidth / designWidth;
+  // 设置 HTML 根字体大小 (限制最小缩放到0.75倍即12px，防止缩太小糊成一团)
+  const fontSize = Math.max(baseFontSize * scale, 12);
+  document.documentElement.style.fontSize = fontSize + 'px';
+};
+
+onMounted(() => {
+  setRem(); // 初始化执行一次
+  window.addEventListener('resize', setRem); // 监听窗口变化
+});
+
+onUnmounted(() => {
+  window.removeEventListener('resize', setRem); // 销毁时移除监听
+});
+// ==========================================
 </script>
 
 <template>
@@ -36,6 +57,8 @@ async function signOut() {
         <RouterLink v-if="can('system.read')" to="/license">许可证管理</RouterLink>
         <RouterLink v-if="can('user.read')" to="/admin/users">用户管理</RouterLink>
       </nav>
+      <!-- 【修改1】：在登录页时提供一个空的占位 div，确保 grid 布局的三等分不被破坏，让标题完美居中 -->
+      <div v-else></div>
 
       <!-- 中间品牌区 -->
       <div class="fui-brand">
@@ -60,7 +83,8 @@ async function signOut() {
             退出 ⏻
           </button>
         </template>
-        <RouterLink v-else-if="auth.securityEnabled" class="fui-btn-login" to="/login">
+        <!-- 【修改2】：加上 !showLoginPage，如果在登录页，就隐藏右上角的登录按钮 -->
+        <RouterLink v-else-if="auth.securityEnabled && !showLoginPage" class="fui-btn-login" to="/login">
           登录
         </RouterLink>
       </div>
@@ -71,7 +95,6 @@ async function signOut() {
     </main>
   </div>
 </template>
-
 <style>
 /* 全局深色底色，防止滚动时出现白边 */
 body {
@@ -247,7 +270,7 @@ body {
 .fui-main-content {
   flex: 1;
   padding: 24px;
-  max-width: 1600px;
+
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
