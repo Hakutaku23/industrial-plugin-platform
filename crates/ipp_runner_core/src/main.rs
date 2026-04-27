@@ -45,7 +45,9 @@ struct PluginSpec {
     version: String,
     package_dir: String,
     entry_mode: String,
-    entry_file: String,
+    entry_type: Option<String>,
+    entry_file: Option<String>,
+    entry_module: Option<String>,
     callable: String,
 }
 
@@ -115,9 +117,10 @@ struct PluginResultEnvelope {
     outputs: serde_json::Map<String, serde_json::Value>,
     metrics: serde_json::Map<String, serde_json::Value>,
     logs: Vec<String>,
+    error: ErrorPayload,
 }
 
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, Serialize, Default, Clone)]
 struct ErrorPayload {
     code: String,
     message: String,
@@ -153,7 +156,7 @@ fn main() {
                 plugin_result: PluginResultEnvelope::default(),
                 stderr: String::new(),
                 error: ErrorPayload {
-                    code: "E_INTERNAL".to_string(),
+                    code: "E_RUNNER_INTERNAL".to_string(),
                     message: err.to_string(),
                 },
             };
@@ -208,6 +211,15 @@ fn execute_task() -> Result<ExecuteTaskResult> {
     let stderr_file = File::create(&stderr_path)
         .with_context(|| format!("failed to create stderr log: {}", stderr_path.display()))?;
 
+    let entry_type = request.plugin.entry_type.as_deref().unwrap_or("file").trim();
+    let entry_ref = match entry_type {
+        "module" => request.plugin.entry_module.as_deref().unwrap_or("").trim(),
+        _ => request.plugin.entry_file.as_deref().unwrap_or("").trim(),
+    };
+    if entry_ref.is_empty() {
+        anyhow::bail!("plugin entry reference is empty");
+    }
+
     let mut command = Command::new(&python_exe);
     if let Some(function_host_path) = std::env::var("IPP_FUNCTION_HOST_PATH")
         .ok()
@@ -219,8 +231,9 @@ fn execute_task() -> Result<ExecuteTaskResult> {
     }
     command
         .arg(package_dir.to_string_lossy().to_string())
-        .arg(&request.plugin.entry_file)
+        .arg(entry_ref)
         .arg(&request.plugin.callable)
+        .arg(entry_type)
         .current_dir(&working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
@@ -272,29 +285,37 @@ fn execute_task() -> Result<ExecuteTaskResult> {
 
     let finished_at = iso_now();
     let wall_time_ms = started_instant.elapsed().as_millis();
-    let max_stdout = request.sandbox.max_stdout_bytes.unwrap_or(16 * 1024);
     let max_stderr = request.sandbox.max_stderr_bytes.unwrap_or(16 * 1024);
-    let stdout = read_text_tail(&stdout_path, max_stdout).unwrap_or_default();
     let stderr = read_text_tail(&stderr_path, max_stderr).unwrap_or_default();
     let exit_code = status.code().unwrap_or(-1);
-    let plugin_result = parse_plugin_result(&result_path, &stdout);
+    let max_output_json = request.sandbox.max_output_json_bytes.unwrap_or(512 * 1024);
+    let (plugin_result, result_error) = match parse_plugin_result(&result_path, max_output_json) {
+        Ok(result) => (result, None),
+        Err(error) => (
+            PluginResultEnvelope {
+                status: "failed".to_string(),
+                ..PluginResultEnvelope::default()
+            },
+            Some(error),
+        ),
+    };
 
-    let mut final_status = if exit_code == 0 && plugin_result.status == "success" {
+    let final_status = if kill_reason == "timeout" {
+        "timeout".to_string()
+    } else if exit_code == 0 && plugin_result.status == "success" {
         "success".to_string()
     } else if exit_code == 0 && plugin_result.status == "partial_success" {
         "partial_success".to_string()
-    } else if kill_reason == "timeout" {
-        "timeout".to_string()
     } else {
         "failed".to_string()
     };
 
-    if plugin_result.status == "failed" && exit_code == 0 {
-        final_status = "failed".to_string();
-    }
-
     let error = if final_status == "success" || final_status == "partial_success" {
         ErrorPayload::default()
+    } else if let Some(parse_error) = result_error {
+        parse_error
+    } else if !plugin_result.error.code.is_empty() || !plugin_result.error.message.is_empty() {
+        plugin_result.error.clone()
     } else {
         ErrorPayload {
             code: map_error_code(&kill_reason, exit_code, &plugin_result),
@@ -330,7 +351,11 @@ fn validate_request(request: &ExecuteTaskRequest) -> Result<()> {
         anyhow::bail!("unsupported schema version: {}", request.schema_version);
     }
     if request.plugin.entry_mode != "function" {
-        anyhow::bail!("only function plugins are supported in phase 1");
+        anyhow::bail!("only function plugins are supported in this runner version");
+    }
+    let entry_type = request.plugin.entry_type.as_deref().unwrap_or("file");
+    if entry_type != "file" && entry_type != "module" {
+        anyhow::bail!("unsupported entry_type: {}", entry_type);
     }
     Ok(())
 }
@@ -345,38 +370,55 @@ fn resolve_working_dir(package_dir: &Path, working_dir: Option<&str>) -> PathBuf
     }
 }
 
-fn parse_plugin_result(result_path: &Path, stdout: &str) -> PluginResultEnvelope {
-    let raw_text = if result_path.exists() {
-        fs::read_to_string(result_path).unwrap_or_default()
-    } else {
-        stdout.to_string()
-    };
-
-    if raw_text.trim().is_empty() {
-        return PluginResultEnvelope {
-            status: "failed".to_string(),
-            ..PluginResultEnvelope::default()
-        };
+fn parse_plugin_result(result_path: &Path, max_output_json_bytes: usize) -> std::result::Result<PluginResultEnvelope, ErrorPayload> {
+    if !result_path.exists() {
+        return Err(ErrorPayload {
+            code: "E_PLUGIN_RESULT_MISSING".to_string(),
+            message: "plugin did not produce result.json".to_string(),
+        });
+    }
+    let metadata = fs::metadata(result_path).map_err(|err| ErrorPayload {
+        code: "E_PLUGIN_RESULT_UNREADABLE".to_string(),
+        message: format!("cannot stat result.json: {}", err),
+    })?;
+    if metadata.len() as usize > max_output_json_bytes {
+        return Err(ErrorPayload {
+            code: "E_PLUGIN_RESULT_TOO_LARGE".to_string(),
+            message: format!("result.json exceeds max_output_json_bytes: {}", max_output_json_bytes),
+        });
     }
 
-    let Ok(raw) = serde_json::from_str::<serde_json::Value>(&raw_text) else {
-        return PluginResultEnvelope {
-            status: "failed".to_string(),
-            ..PluginResultEnvelope::default()
-        };
-    };
-    let Some(object) = raw.as_object() else {
-        return PluginResultEnvelope {
-            status: "failed".to_string(),
-            ..PluginResultEnvelope::default()
-        };
-    };
+    let raw_text = fs::read_to_string(result_path).map_err(|err| ErrorPayload {
+        code: "E_PLUGIN_RESULT_UNREADABLE".to_string(),
+        message: format!("cannot read result.json: {}", err),
+    })?;
+    if raw_text.trim().is_empty() {
+        return Err(ErrorPayload {
+            code: "E_PLUGIN_RESULT_EMPTY".to_string(),
+            message: "result.json is empty".to_string(),
+        });
+    }
+
+    let raw = serde_json::from_str::<serde_json::Value>(&raw_text).map_err(|err| ErrorPayload {
+        code: "E_PLUGIN_RESULT_INVALID_JSON".to_string(),
+        message: format!("result.json is not valid JSON: {}", err),
+    })?;
+    let object = raw.as_object().ok_or_else(|| ErrorPayload {
+        code: "E_PLUGIN_RESULT_INVALID_SCHEMA".to_string(),
+        message: "result.json must contain a JSON object".to_string(),
+    })?;
 
     let status = object
         .get("status")
         .and_then(|item| item.as_str())
         .unwrap_or("failed")
         .to_string();
+    if status != "success" && status != "partial_success" && status != "failed" {
+        return Err(ErrorPayload {
+            code: "E_PLUGIN_RESULT_INVALID_STATUS".to_string(),
+            message: format!("unsupported plugin result status: {}", status),
+        });
+    }
     let outputs = object
         .get("outputs")
         .and_then(|item| item.as_object())
@@ -397,13 +439,30 @@ fn parse_plugin_result(result_path: &Path, stdout: &str) -> PluginResultEnvelope
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let error = object
+        .get("error")
+        .and_then(|item| item.as_object())
+        .map(|error_object| ErrorPayload {
+            code: error_object
+                .get("code")
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .to_string(),
+            message: error_object
+                .get("message")
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .to_string(),
+        })
+        .unwrap_or_default();
 
-    PluginResultEnvelope {
+    Ok(PluginResultEnvelope {
         status,
         outputs,
         metrics,
         logs,
-    }
+        error,
+    })
 }
 
 fn map_error_code(kill_reason: &str, exit_code: i32, plugin_result: &PluginResultEnvelope) -> String {
@@ -411,8 +470,8 @@ fn map_error_code(kill_reason: &str, exit_code: i32, plugin_result: &PluginResul
         "timeout" => "E_PROCESS_TIMEOUT".to_string(),
         "memory_limit" => "E_MEMORY_LIMIT_EXCEEDED".to_string(),
         _ if exit_code != 0 => "E_PROCESS_EXIT_NONZERO".to_string(),
-        _ if plugin_result.status != "success" => "E_PLUGIN_FAILED".to_string(),
-        _ => "E_INTERNAL".to_string(),
+        _ if plugin_result.status == "failed" => "E_PLUGIN_FAILED".to_string(),
+        _ => "E_RUNNER_INTERNAL".to_string(),
     }
 }
 
@@ -425,6 +484,9 @@ fn error_message(
     if kill_reason != "none" {
         return format!("plugin process terminated because {}", kill_reason);
     }
+    if !plugin_result.error.message.trim().is_empty() {
+        return plugin_result.error.message.clone();
+    }
     if !stderr.trim().is_empty() {
         return stderr.trim().to_string();
     }
@@ -432,7 +494,7 @@ fn error_message(
         return format!("plugin process exited with code {}", exit_code);
     }
     if plugin_result.status != "success" {
-        return "plugin returned failed status or did not produce result.json".to_string();
+        return "plugin returned failed status".to_string();
     }
     "runner internal error".to_string()
 }

@@ -3,11 +3,11 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.util
-import io
 import json
 import os
 import re
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 from typing import Any
@@ -18,13 +18,20 @@ _MAX_TRACEBACK_CHARS = 12000
 
 def main() -> int:
     _apply_stable_numeric_env_defaults()
-    if len(sys.argv) != 4:
-        _print_stderr("usage: function_host <package_dir> <entry_file> <callable>")
+    if len(sys.argv) not in {4, 5}:
+        _print_stderr("usage: function_host <package_dir> <entry_ref> <callable> [entry_type]")
         return 2
 
     package_dir = Path(sys.argv[1]).resolve()
-    entry_file = sys.argv[2]
+    entry_ref = sys.argv[2]
     callable_name = sys.argv[3]
+    entry_type = (sys.argv[4] if len(sys.argv) == 5 else os.getenv("IPP_ENTRY_TYPE", "file")).strip().lower()
+    if entry_type not in {"file", "module"}:
+        _emit_failure(
+            code="E_PLUGIN_ENTRY_TYPE_UNSUPPORTED",
+            message=f"unsupported entry type: {entry_type}",
+        )
+        return 0
 
     try:
         payload = _read_payload_from_env_or_stdin()
@@ -37,8 +44,7 @@ def main() -> int:
         return 0
 
     try:
-        entry_path = _resolve_entry_path(package_dir=package_dir, entry_file=entry_file)
-        raw_result = _call_function(package_dir, entry_path, callable_name, payload)
+        raw_result = _call_entry(package_dir, entry_ref, entry_type, callable_name, payload)
         result = _normalize_result(raw_result)
         _write_result(result)
         return 0
@@ -49,7 +55,6 @@ def main() -> int:
             exc=exc,
         )
         return 0
-
 
 
 def _apply_stable_numeric_env_defaults() -> None:
@@ -67,6 +72,7 @@ def _apply_stable_numeric_env_defaults() -> None:
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
 
+
 def _read_payload_from_env_or_stdin() -> dict[str, Any]:
     input_file = os.getenv("IPP_INPUT_FILE", "").strip()
     if input_file:
@@ -77,6 +83,28 @@ def _read_payload_from_env_or_stdin() -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("execution payload must be a JSON object")
     return payload
+
+
+def _call_entry(
+    package_dir: Path,
+    entry_ref: str,
+    entry_type: str,
+    callable_name: str,
+    payload: dict[str, Any],
+) -> Any:
+    if entry_type == "module":
+        module = _load_entry_module_by_name(package_dir, entry_ref)
+    else:
+        entry_path = _resolve_entry_path(package_dir=package_dir, entry_file=entry_ref)
+        module = _load_entry_module_by_file(package_dir, entry_path)
+    try:
+        func = getattr(module, callable_name)
+    except AttributeError as exc:
+        raise AttributeError(f"callable not found: {callable_name}") from exc
+    if not callable(func):
+        raise TypeError(f"entry attribute is not callable: {callable_name}")
+    with contextlib.redirect_stdout(sys.stderr):
+        return func(payload)
 
 
 def _resolve_entry_path(*, package_dir: Path, entry_file: str) -> Path:
@@ -90,35 +118,27 @@ def _resolve_entry_path(*, package_dir: Path, entry_file: str) -> Path:
     return entry_path
 
 
-def _call_function(
-    package_dir: Path,
-    entry_path: Path,
-    callable_name: str,
-    payload: dict[str, Any],
-) -> Any:
-    module = _load_entry_module(package_dir, entry_path)
-    try:
-        func = getattr(module, callable_name)
-    except AttributeError as exc:
-        raise AttributeError(f"callable not found: {callable_name}") from exc
-    if not callable(func):
-        raise TypeError(f"entry attribute is not callable: {callable_name}")
+def _load_entry_module_by_name(package_dir: Path, module_name: str):
+    if not _valid_module_name(module_name):
+        raise ValueError(f"invalid entry module name: {module_name}")
+    package_dir_str = str(package_dir)
+    if package_dir_str not in sys.path:
+        sys.path.insert(0, package_dir_str)
+    importlib.invalidate_caches()
     with contextlib.redirect_stdout(sys.stderr):
-        return func(payload)
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+        return importlib.import_module(module_name)
 
 
-def _load_entry_module(package_dir: Path, entry_path: Path):
+def _load_entry_module_by_file(package_dir: Path, entry_path: Path):
     package_dir_str = str(package_dir)
     if package_dir_str not in sys.path:
         sys.path.insert(0, package_dir_str)
 
     module_name = _module_name_from_entry(package_dir, entry_path)
     if module_name is not None:
-        importlib.invalidate_caches()
-        with contextlib.redirect_stdout(sys.stderr):
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-            return importlib.import_module(module_name)
+        return _load_entry_module_by_name(package_dir, module_name)
 
     fallback_name = f"plugin_entry_{abs(hash(entry_path))}"
     spec = importlib.util.spec_from_file_location(fallback_name, entry_path)
@@ -145,6 +165,11 @@ def _module_name_from_entry(package_dir: Path, entry_path: Path) -> str | None:
     if any(not _IDENTIFIER_RE.match(part) for part in parts):
         return None
     return ".".join(parts)
+
+
+def _valid_module_name(value: str) -> bool:
+    parts = str(value or "").split(".")
+    return bool(parts) and all(_IDENTIFIER_RE.match(part) for part in parts)
 
 
 def _normalize_result(raw: Any) -> dict[str, Any]:
@@ -208,7 +233,24 @@ def _write_result(result: dict[str, Any]) -> None:
     if result_file:
         result_path = Path(result_file)
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_text(result_json, encoding="utf-8")
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{result_path.name}.",
+            suffix=".tmp",
+            dir=str(result_path.parent),
+            text=True,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(result_json)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, result_path)
+        finally:
+            try:
+                if Path(tmp_name).exists():
+                    Path(tmp_name).unlink()
+            except OSError:
+                pass
         return
     print(result_json)
 

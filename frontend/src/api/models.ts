@@ -58,6 +58,26 @@ export interface InstanceModelRequirement {
   message: string
 }
 
+export interface ModelHealthIssue {
+  code: string
+  message: string
+  field?: string | null
+  detail?: Record<string, unknown> | null
+}
+
+export interface ModelBindingHealthRecord {
+  instance_id: number
+  healthy: boolean
+  status: string
+  errors: ModelHealthIssue[]
+  warnings: ModelHealthIssue[]
+  requirement?: Record<string, unknown> | null
+  binding?: Record<string, unknown> | null
+  model?: Record<string, unknown> | null
+  version?: Record<string, unknown> | null
+  checked_at?: string | null
+}
+
 export async function listModels(): Promise<ModelSummary[]> {
   const payload = await apiFetch<{ items: ModelSummary[] }>('/api/v1/models')
   return payload.items
@@ -96,6 +116,10 @@ export async function rollbackModel(modelId: number, reason = 'manual rollback')
 
 export async function getInstanceModelRequirement(instanceId: number): Promise<InstanceModelRequirement> {
   return apiFetch<InstanceModelRequirement>(`/api/v1/instances/${instanceId}/model-requirement`)
+}
+
+export async function getInstanceModelBindingHealth(instanceId: number): Promise<ModelBindingHealthRecord> {
+  return apiFetch<ModelBindingHealthRecord>(`/api/v1/instances/${instanceId}/model-binding/health`)
 }
 
 export async function bindInstanceModel(payload: {

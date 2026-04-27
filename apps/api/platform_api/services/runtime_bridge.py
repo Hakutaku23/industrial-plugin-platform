@@ -31,8 +31,12 @@ class RustRunnerBridge:
         task_id: str,
         run_id: str,
         trigger_type: str,
+        entry_type: str | None = None,
+        entry_module: str | None = None,
     ) -> RustRunnerResult:
         task_work_dir = settings.run_storage_dir / run_id
+        resolved_entry_type = _resolve_entry_type(entry_file=entry_file, entry_type=entry_type)
+        resolved_entry_module = entry_module or (entry_file if resolved_entry_type == "module" else None)
         request = ExecuteTaskRequestModel(
             schema_version='runner-task/v2',
             task_id=task_id,
@@ -44,7 +48,9 @@ class RustRunnerBridge:
                 'version': 'unknown',
                 'package_dir': str(package_dir),
                 'entry_mode': 'function',
-                'entry_file': entry_file,
+                'entry_type': resolved_entry_type,
+                'entry_file': entry_file if resolved_entry_type == 'file' else None,
+                'entry_module': resolved_entry_module if resolved_entry_type == 'module' else None,
                 'callable': callable_name,
             },
             runtime={
@@ -77,16 +83,20 @@ class RustRunnerBridge:
             payload=payload,
         )
 
-        completed = subprocess.run(
-            [str(self.binary_path), 'execute-task'],
-            input=json.dumps(request.__dict__, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            timeout=max(5, int(timeout_sec) + 5),
-            check=False,
-            cwd=str(settings.project_root),
-            env=self._runner_env(),
-        )
+        try:
+            completed = subprocess.run(
+                [str(self.binary_path), 'execute-task'],
+                input=json.dumps(request.__dict__, ensure_ascii=False),
+                text=True,
+                capture_output=True,
+                timeout=max(5, int(timeout_sec) + 5),
+                check=False,
+                cwd=str(settings.project_root),
+                env=self._runner_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RustRunnerBridgeError(f'Rust runner process timed out: {exc}') from exc
+
         raw_stdout = completed.stdout.strip()
         if not raw_stdout:
             raise RustRunnerBridgeError(f'Rust runner returned empty stdout: {completed.stderr[-1000:]}')
@@ -135,7 +145,8 @@ class RustRunnerBridge:
             pythonpath_parts.append(existing_pythonpath)
         env['PYTHONPATH'] = os.pathsep.join(pythonpath_parts)
 
-        function_host_path = runner_root / 'platform_runner' / 'function_host.py'
+        configured_host = os.getenv('PLATFORM_RUNNER_FUNCTION_HOST_PATH', '').strip()
+        function_host_path = Path(configured_host).resolve() if configured_host else runner_root / 'platform_runner' / 'function_host.py'
         if function_host_path.exists():
             env['IPP_FUNCTION_HOST_PATH'] = str(function_host_path)
         return env
@@ -151,6 +162,16 @@ class RustRunnerBridge:
         if not candidate.exists():
             raise RustRunnerBinaryNotFound(f'Rust runner binary not found: {candidate}')
         return candidate
+
+
+def _resolve_entry_type(*, entry_file: str, entry_type: str | None) -> str:
+    normalized = str(entry_type or '').strip().lower()
+    if normalized in {'file', 'module'}:
+        return normalized
+    entry_text = str(entry_file or '').strip()
+    if entry_text and not entry_text.endswith('.py') and '/' not in entry_text and '\\' not in entry_text:
+        return 'module'
+    return 'file'
 
 
 def _stable_numeric_runtime_env(runtime_env: dict[str, str] | None) -> dict[str, str]:

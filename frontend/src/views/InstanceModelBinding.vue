@@ -4,11 +4,14 @@ import {
   deleteInstanceModelBinding,
   bindInstanceModel,
   getInstanceModelBinding,
+  getInstanceModelBindingHealth,
   getInstanceModelRequirement,
   listModels,
   listModelVersions,
   type InstanceModelRequirement,
+  type ModelBindingHealthRecord,
   type ModelBindingRecord,
+  type ModelHealthIssue,
   type ModelSummary,
   type ModelVersionRecord,
 } from '../api/models'
@@ -26,7 +29,9 @@ const selectedVersionId = ref<number | null>(null)
 const bindingMode = ref<'current' | 'fixed_version'>('current')
 const currentBinding = ref<ModelBindingRecord | null>(null)
 const requirement = ref<InstanceModelRequirement | null>(null)
+const health = ref<ModelBindingHealthRecord | null>(null)
 const loading = ref(false)
+const healthLoading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const message = ref('')
@@ -51,6 +56,19 @@ const canBind = computed(() => {
   if (bindingMode.value === 'fixed_version' && !selectedVersionId.value) return false
   return true
 })
+const healthStatusClass = computed(() => {
+  const status = String(health.value?.status || '').toUpperCase()
+  if (!health.value) return 'health-muted'
+  if (health.value.healthy) return 'health-ok'
+  if (status === 'NO_MODEL_REQUIREMENT') return 'health-muted'
+  return 'health-error'
+})
+const healthTitle = computed(() => {
+  if (!health.value) return '未读取健康状态'
+  if (health.value.healthy) return '模型绑定健康'
+  if (health.value.status === 'NO_MODEL_REQUIREMENT') return '该插件未声明模型依赖'
+  return '模型绑定存在阻断项'
+})
 
 async function loadAll() {
   loading.value = true
@@ -62,15 +80,20 @@ async function loadAll() {
     if (!selectedInstanceId.value && instances.value.length > 0) {
       selectedInstanceId.value = instances.value[0].id
     }
-    await loadRequirement()
-    applyDefaultCompatibleModel()
-    await loadVersions()
-    await loadCurrentBinding()
+    await loadSelectedInstanceState()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '实例模型绑定数据加载失败'
   } finally {
     loading.value = false
   }
+}
+
+async function loadSelectedInstanceState() {
+  await loadRequirement()
+  applyDefaultCompatibleModel()
+  await loadVersions()
+  await loadCurrentBinding()
+  await loadHealth()
 }
 
 async function loadRequirement() {
@@ -81,6 +104,30 @@ async function loadRequirement() {
   } catch (err) {
     requirement.value = null
     error.value = err instanceof Error ? err.message : '读取插件模型指纹要求失败'
+  }
+}
+
+async function loadHealth() {
+  health.value = null
+  if (!selectedInstanceId.value) return
+  healthLoading.value = true
+  try {
+    health.value = await getInstanceModelBindingHealth(selectedInstanceId.value)
+  } catch (err) {
+    health.value = {
+      instance_id: selectedInstanceId.value,
+      healthy: false,
+      status: 'HEALTH_ENDPOINT_FAILED',
+      errors: [{ code: 'E_HEALTH_ENDPOINT_FAILED', message: err instanceof Error ? err.message : '健康检查接口调用失败' }],
+      warnings: [],
+      requirement: null,
+      binding: null,
+      model: null,
+      version: null,
+      checked_at: null,
+    }
+  } finally {
+    healthLoading.value = false
   }
 }
 
@@ -124,9 +171,11 @@ async function submitBinding() {
       binding_mode: bindingMode.value,
       model_version_id: bindingMode.value === 'fixed_version' ? selectedVersionId.value : null,
     })
-    message.value = '模型绑定已保存，family_fingerprint 已通过校验'
+    message.value = '模型绑定已保存，family_fingerprint 已通过后端强校验'
+    await loadHealth()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '模型绑定保存失败'
+    await loadHealth()
   } finally {
     saving.value = false
   }
@@ -141,6 +190,7 @@ async function clearBinding() {
     await deleteInstanceModelBinding(selectedInstanceId.value)
     currentBinding.value = null
     message.value = '模型绑定已解除'
+    await loadHealth()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '解除绑定失败'
   } finally {
@@ -153,7 +203,18 @@ function statusClass(status: string) {
   if (normalized.includes('active')) return 'status-online'
   if (normalized.includes('validated')) return 'status-ok'
   if (normalized.includes('uploaded')) return 'status-warn'
+  if (normalized.includes('running')) return 'status-online'
+  if (normalized.includes('failed')) return 'status-error'
   return 'status-muted'
+}
+
+function issueClass(issue: ModelHealthIssue) {
+  if (issue.code.includes('WARNING') || issue.code.includes('WARN')) return 'issue-warn'
+  return 'issue-error'
+}
+
+function stringify(value: unknown) {
+  return JSON.stringify(value ?? {}, null, 2)
 }
 
 watch(selectedModelId, async () => {
@@ -163,10 +224,7 @@ watch(selectedModelId, async () => {
 watch(selectedInstanceId, async () => {
   error.value = ''
   message.value = ''
-  await loadRequirement()
-  applyDefaultCompatibleModel()
-  await loadVersions()
-  await loadCurrentBinding()
+  await loadSelectedInstanceState()
 })
 
 onMounted(loadAll)
@@ -182,11 +240,12 @@ onMounted(loadAll)
         <div>
           <p class="eyebrow">INSTANCE MODEL BINDING</p>
           <h2 class="page-title">实例模型绑定</h2>
-          <p class="page-desc">只允许绑定 family_fingerprint 与插件声明一致的模型；未声明模型指纹的插件拒绝绑定。</p>
+          <p class="page-desc">只允许绑定 family_fingerprint 与插件声明一致的模型；健康检查会同步检查 active 版本、固定版本、artifact 文件与 checksum。</p>
         </div>
-        <button type="button" class="cyber-button-outline" :disabled="loading" @click="loadAll">
-          刷新
-        </button>
+        <div class="intro-actions">
+          <button type="button" class="cyber-button-outline" :disabled="loading" @click="loadAll">刷新</button>
+          <button type="button" class="cyber-button-outline" :disabled="healthLoading || !selectedInstanceId" @click="loadHealth">健康检查</button>
+        </div>
       </div>
 
       <div v-if="error" class="error-banner"><span class="blink">!</span> ERROR: {{ error }}</div>
@@ -217,6 +276,29 @@ onMounted(loadAll)
             <label>当前实例</label>
             <strong>{{ selectedInstance.name }}</strong>
             <span>{{ selectedInstance.package_name }}@{{ selectedInstance.version }}</span>
+          </div>
+
+          <div class="health-card" :class="healthStatusClass">
+            <div class="health-head">
+              <div>
+                <label>绑定健康状态</label>
+                <strong>{{ healthTitle }}</strong>
+              </div>
+              <span class="health-badge">{{ healthLoading ? 'CHECKING' : (health?.status || 'UNKNOWN') }}</span>
+            </div>
+            <div v-if="health?.errors?.length" class="issue-list">
+              <div v-for="item in health.errors" :key="`${item.code}:${item.message}`" class="issue-item" :class="issueClass(item)">
+                <code>{{ item.code }}</code>
+                <span>{{ item.message }}</span>
+              </div>
+            </div>
+            <div v-if="health?.warnings?.length" class="issue-list">
+              <div v-for="item in health.warnings" :key="`${item.code}:${item.message}`" class="issue-item issue-warn">
+                <code>{{ item.code }}</code>
+                <span>{{ item.message }}</span>
+              </div>
+            </div>
+            <p v-if="health?.healthy" class="health-ok-text">运行前模型绑定校验通过。</p>
           </div>
 
           <div class="requirement-box" :class="{ blocked: !requiredFingerprint }">
@@ -269,6 +351,10 @@ onMounted(loadAll)
               <label>active 版本</label>
               <strong>{{ activeVersionLabel }}</strong>
             </div>
+            <div>
+              <label>模型状态</label>
+              <strong :class="statusClass(selectedModel.status)">{{ selectedModel.status }}</strong>
+            </div>
             <div class="full">
               <label>family_fingerprint</label>
               <code>{{ selectedModel.family_fingerprint }}</code>
@@ -302,6 +388,11 @@ onMounted(loadAll)
               </div>
             </div>
           </div>
+
+          <details v-if="health" class="raw-details">
+            <summary>查看健康检查原始数据</summary>
+            <pre>{{ stringify(health) }}</pre>
+          </details>
 
           <div class="action-row">
             <button type="button" class="cyber-submit-btn" :disabled="saving || !canBind" @click="submitBinding">
@@ -363,6 +454,7 @@ onMounted(loadAll)
 .corner-br { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
 
 .intro { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 28px; }
+.intro-actions { display: flex; gap: 12px; flex-wrap: wrap; }
 .eyebrow, .section-tag { font-size: 11px; letter-spacing: 3px; color: var(--cyan); margin: 0 0 10px; }
 .page-title { margin: 0 0 8px; font-size: 28px; color: #fff; }
 .page-desc { margin: 0; color: var(--text-dim); font-size: 13px; }
@@ -397,9 +489,10 @@ onMounted(loadAll)
 .status-online { color: #00ffcc; }
 .status-ok { color: #86efac; }
 .status-warn { color: #fde68a; }
+.status-error { color: #ff7777; }
 .status-muted { color: var(--text-dim); }
 
-.selected-box, .requirement-box, .warning-panel {
+.selected-box, .requirement-box, .warning-panel, .health-card {
   display: grid;
   gap: 7px;
   margin-bottom: 18px;
@@ -407,11 +500,21 @@ onMounted(loadAll)
   border-left: 3px solid var(--cyan);
   background: rgba(0, 242, 255, 0.06);
 }
-.requirement-box.blocked, .warning-panel {
+.requirement-box.blocked, .warning-panel, .health-error {
   border-left-color: #ff7777;
   background: rgba(255, 77, 77, 0.08);
 }
-.selected-box label, .requirement-box label, .model-summary label, .binding-grid label, .field span {
+.health-ok { border-left-color: #00ffcc; background: rgba(0, 255, 204, 0.06); }
+.health-muted { border-left-color: rgba(255,255,255,.28); background: rgba(255, 255, 255, 0.04); }
+.health-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+.health-badge { color: var(--cyan); font-family: "Courier New", monospace; font-size: 12px; border: 1px solid rgba(0,242,255,.3); padding: 3px 8px; }
+.health-ok-text { color: #00ffcc; margin: 0; }
+.issue-list { display: grid; gap: 8px; }
+.issue-item { display: grid; gap: 4px; padding: 10px; border: 1px solid rgba(255, 119, 119, .3); background: rgba(255, 119, 119, .08); }
+.issue-warn { border-color: rgba(253, 230, 138, .35); background: rgba(253, 230, 138, .08); }
+.issue-error code { color: #ff7777; }
+.issue-warn code { color: #fde68a; }
+.selected-box label, .requirement-box label, .model-summary label, .binding-grid label, .field span, .health-card label {
   color: var(--text-dim);
   font-size: 11px;
   letter-spacing: 1px;
@@ -435,7 +538,7 @@ select {
 }
 select:focus { border-color: var(--border-cyan-strong); }
 
-.model-summary, .current-binding, .hint-panel { margin-top: 22px; }
+.model-summary, .current-binding, .hint-panel, .raw-details { margin-top: 22px; }
 .model-summary > div, .binding-grid > div {
   display: grid;
   gap: 7px;
@@ -450,6 +553,8 @@ code, pre {
   overflow-wrap: anywhere;
 }
 pre { margin: 0; font-size: 12px; line-height: 1.6; }
+.raw-details { border: 1px solid rgba(0,242,255,.18); padding: 12px; background: rgba(0,0,0,.24); }
+.raw-details summary { cursor: pointer; color: var(--cyan); margin-bottom: 10px; }
 
 .action-row { display: flex; justify-content: flex-end; gap: 14px; margin-top: 24px; }
 .cyber-submit-btn, .cyber-button-outline, .danger-btn {

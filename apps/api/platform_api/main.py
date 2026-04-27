@@ -6,8 +6,10 @@ from fastapi import FastAPI
 from platform_api.api.routes import router
 from platform_api.core.config import settings
 from platform_api.middleware import configure_middlewares
+from platform_api.services.database_cleanup import database_cleanup_service
 from platform_api.services.license_manager import license_manager
 from platform_api.services.metadata_store import MetadataStore
+from platform_api.services.run_directory_cleanup import run_directory_cleanup_service
 from platform_api.services.scheduler import scheduler
 from platform_api.security import make_password_hash
 from platform_api.services.security_store import SecurityStore
@@ -28,6 +30,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             email=settings.security.bootstrap_admin_email,
             password_hash=make_password_hash(settings.security.bootstrap_admin_password),
         )
+    run_directory_cleanup_service.start()
+    database_cleanup_service.start()
     if settings.scheduler.enabled:
         scheduler.start()
     try:
@@ -35,6 +39,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if settings.scheduler.enabled:
             scheduler.stop()
+        database_cleanup_service.stop()
+        run_directory_cleanup_service.stop()
 
 
 def create_app() -> FastAPI:

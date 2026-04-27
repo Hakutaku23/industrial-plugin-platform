@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -7,6 +8,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from platform_api.services.manifest import ManifestError, PluginManifest, load_manifest
 
@@ -35,6 +37,7 @@ class PackageStorage:
 
         staging_dir = self.root / "_intake" / f"{digest}-{uuid.uuid4().hex}"
         staging_dir.mkdir(parents=True, exist_ok=False)
+        target_dir: Path | None = None
         try:
             archive_path = staging_dir / f"upload{suffix}"
             archive_path.write_bytes(content)
@@ -53,6 +56,7 @@ class PackageStorage:
                 raise PackageStorageError(str(exc)) from exc
 
             self._validate_entry_exists(package_root, manifest)
+            self._validate_checksums(package_root)
             target_dir = self.root / manifest.metadata.name / manifest.metadata.version / digest[:12]
             if not target_dir.exists():
                 target_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +64,8 @@ class PackageStorage:
         finally:
             self._remove_child_dir(staging_dir)
 
+        if target_dir is None:
+            raise PackageStorageError("plugin package target directory was not resolved")
         return PackageRecord(manifest=manifest, digest=digest, package_dir=target_dir)
 
     def _archive_suffix(self, filename: str) -> str | None:
@@ -118,13 +124,82 @@ class PackageStorage:
 
     def _validate_entry_exists(self, package_dir: Path, manifest: PluginManifest) -> None:
         entry = manifest.spec.entry
-        if entry.file:
+        entry_type = getattr(entry, "entry_type", "file")
+        if entry_type == "file":
+            if not entry.file:
+                raise PackageStorageError("entry.file is required for file entry")
             entry_path = (package_dir / entry.file).resolve()
             package_root = package_dir.resolve()
             if package_root not in entry_path.parents and entry_path != package_root:
                 raise PackageStorageError("entry file escapes package directory")
             if not entry_path.exists():
                 raise PackageStorageError(f"entry file not found: {entry.file}")
+            if not entry_path.is_file():
+                raise PackageStorageError(f"entry path is not a file: {entry.file}")
+            return
+
+        if entry_type == "module":
+            if not entry.module:
+                raise PackageStorageError("entry.module is required for module entry")
+            module_rel = Path(*entry.module.split("."))
+            module_file = (package_dir / module_rel).with_suffix(".py")
+            package_init = package_dir / module_rel / "__init__.py"
+            if module_file.is_file() or package_init.is_file():
+                return
+            raise PackageStorageError(
+                f"entry module not found: expected {module_file.relative_to(package_dir)} "
+                f"or {package_init.relative_to(package_dir)}"
+            )
+
+        raise PackageStorageError(f"unsupported entry.type: {entry_type}")
+
+    def _validate_checksums(self, package_dir: Path) -> None:
+        checksums_path = package_dir / "checksums.json"
+        if not checksums_path.exists():
+            return
+        try:
+            payload = json.loads(checksums_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise PackageStorageError(f"checksums.json is not valid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise PackageStorageError("checksums.json must contain a JSON object")
+        files = payload.get("files", {})
+        if not isinstance(files, dict):
+            raise PackageStorageError("checksums.json files must be an object")
+
+        root = package_dir.resolve()
+        for relative_path, expected_raw in files.items():
+            relative_text = str(relative_path).strip()
+            self._assert_safe_relative_path(relative_text)
+            path = (root / relative_text).resolve()
+            if root not in path.parents and path != root:
+                raise PackageStorageError(f"checksum path escapes package root: {relative_text}")
+            if not path.is_file():
+                raise PackageStorageError(f"checksum file not found: {relative_text}")
+            expected = self._normalize_sha256(str(expected_raw))
+            actual = self._sha256_file(path)
+            if expected != actual:
+                raise PackageStorageError(f"checksum mismatch: {relative_text}")
+
+    def _assert_safe_relative_path(self, value: str) -> None:
+        path = PurePosixPath(value.replace("\\", "/"))
+        if not value or path.is_absolute() or ".." in path.parts:
+            raise PackageStorageError(f"unsafe relative path: {value}")
+
+    def _normalize_sha256(self, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized.startswith("sha256:"):
+            normalized = normalized.split(":", 1)[1]
+        if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+            raise PackageStorageError("sha256 value must be sha256:<64 hex> or 64 hex")
+        return normalized
+
+    def _sha256_file(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _remove_child_dir(self, path: Path) -> None:
         root = self.root.resolve()
@@ -134,11 +209,19 @@ class PackageStorage:
         if resolved.exists():
             try:
                 shutil.rmtree(resolved, onexc=_reset_permissions)
+            except TypeError:
+                shutil.rmtree(resolved, onerror=_reset_permissions_legacy)
             except PermissionError:
                 pass
 
 
 def _reset_permissions(function: object, path: str, exc_info: BaseException) -> None:
+    os.chmod(path, stat.S_IWRITE)
+    if callable(function):
+        function(path)
+
+
+def _reset_permissions_legacy(function: object, path: str, exc_info: object) -> None:
     os.chmod(path, stat.S_IWRITE)
     if callable(function):
         function(path)

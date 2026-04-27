@@ -3,7 +3,6 @@ import { useAuthStore } from '../stores/auth'
 import { pinia } from '../stores/pinia'
 import AdminUsers from '../views/AdminUsers.vue'
 import DataSources from '../views/DataSources.vue'
-// import HomeCenter from '../views/HomeCenter old.vue'
 import HomeCenter from '../views/HomeCenter.vue'
 import Instances from '../views/Instances.vue'
 import InstanceModelBinding from '../views/InstanceModelBinding.vue'
@@ -13,7 +12,8 @@ import ModelRegistry from '../views/ModelRegistry.vue'
 import PluginList from '../views/PluginList.vue'
 import PluginUpload from '../views/PluginUpload.vue'
 import RunList from '../views/RunList.vue'
-// import SystemObservability from '../views/SystemObservability.vue'
+import SystemSettings from '../views/SystemSettings.vue'
+import TemplateCenter from '../views/TemplateCenter.vue'
 import UserProfile from '../views/UserProfile.vue'
 
 export const router = createRouter({
@@ -23,13 +23,14 @@ export const router = createRouter({
     { path: '/', name: 'home-center', component: HomeCenter, meta: { permission: 'package.read' } },
     { path: '/home', redirect: '/' },
     { path: '/packages/upload', name: 'plugin-upload', component: PluginUpload, meta: { permission: 'package.read' } },
+    { path: '/templates', name: 'template-center', component: TemplateCenter, meta: { permission: 'package.read' } },
     { path: '/packages', name: 'plugin-list', component: PluginList, meta: { permission: 'package.read' } },
     { path: '/models', name: 'model-registry', component: ModelRegistry, meta: { permission: 'package.read' } },
     { path: '/data-sources', name: 'data-sources', component: DataSources, meta: { permission: 'datasource.read' } },
     { path: '/instances/model-binding', name: 'instance-model-binding', component: InstanceModelBinding, meta: { permission: 'instance.read' } },
     { path: '/instances', name: 'instances', component: Instances, meta: { permission: 'instance.read' } },
     { path: '/runs', name: 'run-list', component: RunList, meta: { permission: 'run.read' } },
-    // { path: '/system/observability', name: 'system-observability', component: SystemObservability, meta: { permission: 'system.read' } },
+    { path: '/system/settings', name: 'system-settings', component: SystemSettings, meta: { permission: 'system.read' } },
     { path: '/license', name: 'license-center', component: LicenseCenter, meta: { permission: 'system.read' } },
     { path: '/admin/users', name: 'admin-users', component: AdminUsers, meta: { permission: 'user.read' } },
     { path: '/profile', name: 'profile', component: UserProfile },

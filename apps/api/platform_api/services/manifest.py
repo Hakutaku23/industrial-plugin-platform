@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RESERVED_OUTPUT_NAMES = {"status", "outputs", "logs", "metrics", "error"}
 
 
@@ -42,7 +43,9 @@ class PluginMetadata(BaseModel):
 
 class EntrySpec(BaseModel):
     mode: Literal["function", "cli", "service"]
+    entry_type: Literal["file", "module"] = Field(default="file", alias="type")
     file: str | None = None
+    module: str | None = None
     callable: str | None = None
     command: list[str] | None = None
     health_endpoint: str | None = Field(default=None, alias="healthEndpoint")
@@ -50,11 +53,59 @@ class EntrySpec(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @field_validator("file")
+    @classmethod
+    def validate_file(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        if normalized.startswith("/") or "\\" in normalized or ".." in Path(normalized).parts:
+            raise ValueError("entry.file must be a safe package-relative path")
+        return normalized
+
+    @field_validator("module")
+    @classmethod
+    def validate_module(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        parts = normalized.split(".")
+        if any(not IDENTIFIER_RE.match(part) for part in parts):
+            raise ValueError("entry.module must be a valid Python module path")
+        return normalized
+
+    @field_validator("callable")
+    @classmethod
+    def validate_callable(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        if not IDENTIFIER_RE.match(normalized):
+            raise ValueError("entry.callable must be a valid Python identifier")
+        return normalized
+
     @model_validator(mode="after")
     def validate_entry(self) -> "EntrySpec":
         if self.mode == "function":
-            if not self.file or not self.callable:
-                raise ValueError("function entry requires file and callable")
+            if not self.callable:
+                raise ValueError("function entry requires callable")
+            if self.entry_type == "file":
+                if not self.file:
+                    raise ValueError("function file entry requires file")
+            elif self.entry_type == "module":
+                if not self.module:
+                    raise ValueError("function module entry requires module")
+                # Compatibility shim: existing execution code passes entry.file to the runner.
+                # For module entries, keep file populated with module path until the whole
+                # execution protocol is fully moved to entry_type/entry_module fields.
+                if not self.file:
+                    self.file = self.module
         if self.mode in {"cli", "service"} and not self.command:
             raise ValueError(f"{self.mode} entry requires command")
         return self
@@ -163,7 +214,7 @@ class ModelDependencySpec(BaseModel):
 
 
 class PluginManifest(BaseModel):
-    api_version: Literal["plugin.platform/v1"] = Field(alias="apiVersion")
+    api_version: Literal["plugin.platform/v1", "plugin.platform/v2"] = Field(alias="apiVersion")
     kind: Literal["PluginPackage"]
     metadata: PluginMetadata
     spec: PluginSpec

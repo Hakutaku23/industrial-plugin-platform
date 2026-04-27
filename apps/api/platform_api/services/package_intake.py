@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import stat
 import tarfile
 import tempfile
@@ -29,7 +28,7 @@ def detect_package_kind(*, filename: str, content: bytes) -> PackageIntakeResult
     """Classify an uploaded package by manifest.yaml.
 
     Plugin package:
-      apiVersion: plugin.platform/v1
+      apiVersion: plugin.platform/v1 or plugin.platform/v2
       kind: PluginPackage
 
     Model artifact package:
@@ -66,7 +65,7 @@ def detect_package_kind(*, filename: str, content: bytes) -> PackageIntakeResult
         kind = str(raw.get("kind", "")).strip()
         schema = str(raw.get("schema", "")).strip()
 
-        if api_version == "plugin.platform/v1" and kind == "PluginPackage":
+        if api_version in {"plugin.platform/v1", "plugin.platform/v2"} and kind == "PluginPackage":
             return PackageIntakeResult(kind="plugin", manifest=raw)
         if schema == "ipp-model/v1" and isinstance(raw.get("model"), dict) and isinstance(raw.get("artifacts"), dict):
             return PackageIntakeResult(kind="model", manifest=raw)
