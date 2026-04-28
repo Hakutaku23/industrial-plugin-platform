@@ -15,6 +15,7 @@ import RunList from '../views/RunList.vue'
 import SystemSettings from '../views/SystemSettings.vue'
 import TemplateCenter from '../views/TemplateCenter.vue'
 import UserProfile from '../views/UserProfile.vue'
+import RuntimeDiagnostics from '../views/RuntimeDiagnostics.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -34,6 +35,12 @@ export const router = createRouter({
     { path: '/license', name: 'license-center', component: LicenseCenter, meta: { permission: 'system.read' } },
     { path: '/admin/users', name: 'admin-users', component: AdminUsers, meta: { permission: 'user.read' } },
     { path: '/profile', name: 'profile', component: UserProfile },
+    { 
+          path: '/runtime-diagnostics', 
+          name: 'runtime-diagnostics', 
+          component: RuntimeDiagnostics, 
+          meta: { permission: 'system.read' } // 和App.vue的权限对应
+        },
   ],
 })
 

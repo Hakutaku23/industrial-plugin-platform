@@ -241,158 +241,214 @@ onMounted(loadModels)
 </template>
 
 <style scoped>
+/* 整体页面容器：新增最大宽度和居中，防止超大屏过度拉伸 */
 .model-page {
+  max-width: 1600px;
+  margin: 0 auto;
   color: #d9f7ff;
-  padding: 10px 0 40px;
+  padding: 16px 24px 40px;
+  box-sizing: border-box;
 }
 
+/* 顶部 Header 优化：更加紧凑 */
 .model-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
-  padding: 20px 24px;
+  gap: 20px;
+  margin-bottom: 16px;
+  padding: 16px 20px;
   border: 1px solid rgba(0, 243, 255, 0.28);
   background: rgba(2, 18, 38, 0.72);
   box-shadow: inset 0 0 22px rgba(0, 243, 255, 0.08);
+  border-radius: 6px;
 }
 
 .eyebrow {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   color: #00f3ff;
   font-size: 11px;
-  letter-spacing: 0.28em;
+  letter-spacing: 0.2em;
 }
 
-h2, h3 {
+h2 {
   margin: 0;
   color: #ffffff;
+  font-size: 20px;
+}
+h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 16px;
 }
 
 .subline, .panel-hint, .description {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: rgba(160, 207, 255, 0.76);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .header-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
+/* 主体网格布局优化：改用 Flex 彻底解决中间空隙过大的问题 */
 .model-grid {
-  display: grid;
-  grid-template-columns: 330px minmax(0, 1fr);
-  gap: 18px;
+  /* 强制使用 Grid 布局，抗干扰能力最强 */
+  display: grid !important;
+  /* 左边死锁 280px，右边 (1fr) 强制吃掉所有剩余空间，minmax(0,1fr) 防止表格撑破容器 */
+  grid-template-columns: 280px minmax(0, 1fr) !important; 
+  gap: 20px !important; /* 死锁左右两边的间距永远是 20px */
+  align-items: start;
+  width: 100% !important;
+  margin: 0 !important;
 }
 
 .panel {
   border: 1px solid rgba(0, 243, 255, 0.24);
   background: rgba(3, 13, 28, 0.82);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
-  padding: 18px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  padding: 16px;
+  border-radius: 6px;
+  /* 确保盒子模型计算准确，右侧面板拉伸时边框才会丝滑跟着走 */
+  box-sizing: border-box !important; 
+}
+
+/* 强制左侧面板固定宽度 */
+.model-list-panel {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+/* 强制右侧面板自适应撑满剩余空间 */
+.detail-panel {
+  width: 100% !important;
+  max-width: none !important; /* 强制干掉任何限制右侧面板宽度的全局样式 */
+  margin: 0 !important;
 }
 
 .panel-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed rgba(0, 243, 255, 0.15);
 }
 
 .panel-title span {
   color: #00f3ff;
   font-size: 12px;
+  background: rgba(0, 243, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 10px;
 }
 
+/* 侧边模型列表优化：更加紧凑和扁平化 */
 .model-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .model-item {
   text-align: left;
-  border: 1px solid rgba(0, 243, 255, 0.18);
-  background: rgba(0, 243, 255, 0.04);
+  border: 1px solid rgba(0, 243, 255, 0.12);
+  background: rgba(0, 243, 255, 0.02);
   color: #d9f7ff;
-  padding: 12px;
+  padding: 10px 12px;
   cursor: pointer;
-  transition: 0.2s;
+  transition: all 0.2s ease-in-out;
+  border-radius: 4px;
 }
 
-.model-item:hover,
+.model-item:hover {
+  border-color: rgba(0, 243, 255, 0.5);
+  background: rgba(0, 243, 255, 0.08);
+}
+
 .model-item.active {
   border-color: #00f3ff;
-  background: rgba(0, 243, 255, 0.13);
-}
-
-.model-item strong,
-.model-item span,
-.model-item em {
-  display: block;
+  background: rgba(0, 243, 255, 0.15);
+  box-shadow: inset 2px 0 0 #00f3ff;
 }
 
 .model-item strong {
+  display: block;
   color: #ffffff;
-  font-size: 14px;
+  font-size: 13px;
+  margin-bottom: 2px;
 }
 
 .model-item span {
-  margin-top: 4px;
-  color: rgba(160, 207, 255, 0.8);
-  font-size: 12px;
+  display: block;
+  color: rgba(160, 207, 255, 0.6);
+  font-size: 11px;
 }
 
 .model-item em {
-  margin-top: 8px;
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 6px;
+  background: rgba(0, 243, 255, 0.1);
+  border-radius: 2px;
   color: #00f3ff;
   font-style: normal;
-  font-size: 12px;
+  font-size: 11px;
 }
 
+/* 右侧详情面板头部优化 */
 .detail-head {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid rgba(0, 243, 255, 0.18);
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(0, 243, 255, 0.15);
 }
 
 .detail-head p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: rgba(160, 207, 255, 0.8);
+  font-size: 13px;
 }
 
 .fingerprint {
   font-family: "Courier New", monospace;
   color: #00f3ff !important;
   word-break: break-all;
+  font-size: 12px !important;
+  opacity: 0.8;
 }
 
+/* 概览网格优化：规整边框与间距 */
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   background: rgba(0, 243, 255, 0.18);
   border: 1px solid rgba(0, 243, 255, 0.18);
-  margin: 16px 0;
+  margin: 12px 0 16px;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
 .summary-grid div {
-  background: rgba(1, 10, 18, 0.9);
-  padding: 14px;
+  background: rgba(1, 10, 18, 0.95);
+  padding: 10px 14px;
 }
 
 .summary-grid label {
   display: block;
-  color: rgba(160, 207, 255, 0.64);
+  color: rgba(160, 207, 255, 0.5);
   font-size: 11px;
-  margin-bottom: 7px;
+  margin-bottom: 4px;
 }
 
 .summary-grid strong {
@@ -401,93 +457,128 @@ h2, h3 {
   word-break: break-all;
 }
 
+/* 表格优化：减小单元格高度，增加悬浮态 */
 .version-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .version-table th,
 .version-table td {
-  border-bottom: 1px solid rgba(0, 243, 255, 0.12);
-  padding: 11px 10px;
+  border-bottom: 1px solid rgba(0, 243, 255, 0.1);
+  padding: 10px 8px;
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .version-table th {
   color: #00f3ff;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: normal;
+  background: rgba(0, 243, 255, 0.03);
+}
+
+.version-table tbody tr {
+  transition: background 0.2s;
+}
+
+.version-table tbody tr:hover {
+  background: rgba(0, 243, 255, 0.05);
 }
 
 .artifact-cell,
 .metric-cell {
-  max-width: 260px;
+  max-width: 220px;
   color: rgba(160, 207, 255, 0.82);
   word-break: break-word;
+  line-height: 1.4;
 }
 
 .status-pill {
   display: inline-flex;
   border: 1px solid rgba(0, 243, 255, 0.38);
   color: #00f3ff;
-  padding: 2px 8px;
+  padding: 2px 6px;
   font-size: 11px;
+  border-radius: 2px;
 }
 
 .status-pill.active {
   color: #00ffcc;
   border-color: rgba(0, 255, 204, 0.5);
+  background: rgba(0, 255, 204, 0.05);
 }
 
 .status-pill.archived {
-  color: rgba(160, 207, 255, 0.72);
-  border-color: rgba(160, 207, 255, 0.24);
+  color: rgba(160, 207, 255, 0.5);
+  border-color: rgba(160, 207, 255, 0.2);
 }
 
 .actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
+/* 按钮统一优化：更精致的大小与交互 */
 .primary-btn,
 .ghost-btn,
 .danger-btn {
   border: 1px solid #00f3ff;
   color: #00f3ff;
-  background: rgba(0, 243, 255, 0.08);
-  padding: 7px 12px;
+  background: rgba(0, 243, 255, 0.05);
+  padding: 5px 12px;
+  border-radius: 3px;
   cursor: pointer;
   text-decoration: none;
   font-size: 12px;
   white-space: nowrap;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .primary-btn {
   background: #00f3ff;
   color: #04121f;
-  font-weight: 800;
+  font-weight: 600;
+}
+.primary-btn:hover:not(:disabled) {
+  background: #33f6ff;
+  box-shadow: 0 0 10px rgba(0, 243, 255, 0.4);
+}
+
+.ghost-btn:hover:not(:disabled) {
+  background: rgba(0, 243, 255, 0.15);
 }
 
 .danger-btn {
   border-color: #ff4d4d;
   color: #ff4d4d;
-  background: rgba(255, 77, 77, 0.08);
+  background: rgba(255, 77, 77, 0.05);
+}
+.danger-btn:hover:not(:disabled) {
+  background: rgba(255, 77, 77, 0.15);
 }
 
 button:disabled,
 a[aria-disabled="true"] {
-  opacity: 0.45;
+  opacity: 0.3;
   cursor: not-allowed;
+  filter: grayscale(1);
 }
 
+/* 提示信息优化 */
 .message {
   border: 1px solid;
-  padding: 10px 12px;
-  margin: 0 0 14px;
-  font-size: 13px;
+  padding: 8px 12px;
+  margin: 0 0 16px;
+  font-size: 12px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
 }
 
 .message.error {
@@ -503,24 +594,30 @@ a[aria-disabled="true"] {
 }
 
 .empty {
-  color: rgba(160, 207, 255, 0.68);
-  padding: 20px;
+  color: rgba(160, 207, 255, 0.4);
+  padding: 30px 20px;
   text-align: center;
+  font-size: 12px;
 }
 
 .empty.big {
-  min-height: 360px;
-  display: grid;
-  place-items: center;
-  align-content: center;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
   gap: 16px;
 }
 
+/* 响应式调整适配 Flex 布局 */
 @media (max-width: 1080px) {
   .model-grid {
-    grid-template-columns: 1fr;
+    flex-direction: column;
   }
-
+  .model-list-panel {
+    flex: none;
+    width: 100%;
+  }
   .summary-grid {
     grid-template-columns: 1fr;
   }

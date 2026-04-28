@@ -1,21 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  getRunDiagnostics,
   listModelBindingHealth,
   type ModelBindingHealthPayload,
   type ModelBindingHealthRecord,
-  type RunDiagnosticsPayload,
 } from '../api/runtimeDiagnostics'
 
 const loading = ref(false)
 const error = ref('')
 const bindingPayload = ref<ModelBindingHealthPayload | null>(null)
 const selectedInstanceId = ref<number | null>(null)
-const runId = ref('')
-const runDiagnostics = ref<RunDiagnosticsPayload | null>(null)
-const runLoading = ref(false)
-const runError = ref('')
 
 const healthItems = computed(() => bindingPayload.value?.items ?? [])
 const selectedHealth = computed(() => {
@@ -73,21 +67,6 @@ async function loadHealth() {
     error.value = err instanceof Error ? err.message : '模型绑定健康状态加载失败'
   } finally {
     loading.value = false
-  }
-}
-
-async function loadRunDiagnostics() {
-  const value = runId.value.trim()
-  if (!value) return
-  runLoading.value = true
-  runError.value = ''
-  runDiagnostics.value = null
-  try {
-    runDiagnostics.value = await getRunDiagnostics(value)
-  } catch (err) {
-    runError.value = err instanceof Error ? err.message : '运行诊断加载失败'
-  } finally {
-    runLoading.value = false
   }
 }
 
@@ -178,170 +157,215 @@ onMounted(loadHealth)
         </template>
       </article>
     </section>
-
-    <section class="panel run-panel">
-      <div class="panel-title-row">
-        <h3>单次运行诊断</h3>
-        <span class="count">RUN ID</span>
-      </div>
-      <form class="run-form" @submit.prevent="loadRunDiagnostics">
-        <input v-model="runId" class="cyber-input" placeholder="run-xxxxxxxx" />
-        <button class="cyber-btn" type="submit" :disabled="runLoading || !runId.trim()">
-          {{ runLoading ? '诊断中...' : '诊断运行' }}
-        </button>
-      </form>
-      <p v-if="runError" class="error-line">{{ runError }}</p>
-
-      <div v-if="runDiagnostics" class="run-detail-grid">
-        <article class="sub-panel">
-          <h4>模型运行指标</h4>
-          <pre>{{ stringify(runDiagnostics.model_metrics) }}</pre>
-        </article>
-        <article class="sub-panel">
-          <h4>回写摘要</h4>
-          <pre>{{ stringify(runDiagnostics.writeback_summary) }}</pre>
-        </article>
-        <article class="sub-panel wide">
-          <h4>诊断建议</h4>
-          <div v-if="runDiagnostics.suggestions.length === 0" class="empty">未发现明显异常</div>
-          <div v-for="item in runDiagnostics.suggestions" :key="`${item.code}-${item.message}`" class="suggestion" :class="`suggestion-${item.level}`">
-            <strong>{{ item.code }}</strong>
-            <span>{{ item.message }}</span>
-          </div>
-        </article>
-        <article class="sub-panel wide">
-          <h4>绑定健康快照</h4>
-          <pre>{{ stringify(runDiagnostics.model_binding_health) }}</pre>
-        </article>
-      </div>
-    </section>
   </div>
 </template>
 
 <style scoped>
-.diag-page {
-  min-height: 100vh;
-  color: #d8f7ff;
-  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+/* 整体页面容器 */
+.diag-hero.panel {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
 }
-.panel,
-.metric-card,
-.sub-panel {
+
+/* 面板通用样式 */
+.panel {
   background: rgba(3, 17, 31, 0.86);
   border: 1px solid rgba(0, 243, 255, 0.24);
-  box-shadow: 0 0 28px rgba(0, 0, 0, 0.3), inset 0 0 18px rgba(0, 243, 255, 0.04);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), inset 0 0 18px rgba(0, 243, 255, 0.04);
+  border-radius: 6px;
+  box-sizing: border-box !important;
 }
+.metric-card {
+  background: rgba(3, 17, 31, 0.86);
+  border: 1px solid rgba(0, 243, 255, 0.24);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), inset 0 0 18px rgba(0, 243, 255, 0.04);
+  border-radius: 6px;
+}
+
+/* 顶部标题区 */
 .diag-hero {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 28px;
-  margin-bottom: 20px;
+  gap: 20px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
 }
+
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
   color: #00f3ff;
-  letter-spacing: 0.22em;
-  font-size: 12px;
+  letter-spacing: 0.2em;
+  font-size: 11px;
 }
-h2, h3, h4 { margin: 0; }
-.desc { margin: 10px 0 0; color: rgba(216, 247, 255, 0.62); }
+
+h2 { margin: 0; font-size: 20px; color: #fff; }
+h3 { margin: 0; font-size: 16px; color: #fff; }
+h4 { margin: 0 0 10px 0; font-size: 14px; color: #00f3ff; }
+
+.desc { margin: 6px 0 0; color: rgba(216, 247, 255, 0.62); font-size: 12px; }
+
+/* 按钮 */
 .cyber-btn {
-  background: rgba(0, 243, 255, 0.12);
+  background: rgba(0, 243, 255, 0.08);
   border: 1px solid #00f3ff;
   color: #00f3ff;
-  padding: 10px 18px;
-  font-weight: 700;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
-  clip-path: polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
 }
-.cyber-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.cyber-btn:hover:not(:disabled) {
+  background: #00f3ff;
+  color: #04121f;
+  box-shadow: 0 0 12px rgba(0, 243, 255, 0.4);
+}
+.cyber-btn:disabled { opacity: 0.3; cursor: not-allowed; filter: grayscale(1); }
+
+/* 错误提示 */
 .error-line {
-  padding: 12px 16px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
   color: #ff6688;
+  font-size: 12px;
   border: 1px solid rgba(255, 80, 120, 0.36);
   background: rgba(255, 80, 120, 0.08);
+  border-radius: 4px;
 }
+
+/* 汇总卡片 */
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
-  gap: 14px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
-.metric-card { padding: 18px; }
-.metric-card span { display: block; color: rgba(216, 247, 255, 0.55); font-size: 12px; }
-.metric-card strong { display: block; margin-top: 8px; font-size: 28px; color: #fff; }
+.metric-card { padding: 14px 16px; }
+.metric-card span { display: block; color: rgba(216, 247, 255, 0.55); font-size: 11px; }
+.metric-card strong { display: block; margin-top: 6px; font-size: 22px; color: #fff; }
 .tone-ok strong { color: #00ffcc; }
 .tone-warning strong { color: #ffaa00; }
 .tone-error strong { color: #ff6688; }
 .tone-info strong { color: #00f3ff; }
+
+/* 左右分栏布局 */
 .layout-grid {
-  display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.4fr);
-  gap: 20px;
+  display: grid !important;
+  grid-template-columns: 320px minmax(0, 1fr) !important;
+  gap: 20px !important;
+  align-items: start !important;
+  width: 100% !important;
+  margin: 0 !important;
 }
-.list-panel,
-.detail-panel,
-.run-panel { padding: 22px; }
+
+.list-panel {
+  padding: 16px !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+.detail-panel {
+  padding: 16px !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
 .panel-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(0, 243, 255, 0.15);
 }
-.count { color: rgba(0, 243, 255, 0.65); font-size: 12px; }
+.count { color: rgba(0, 243, 255, 0.65); font-size: 11px; background: rgba(0, 243, 255, 0.1); padding: 2px 6px; border-radius: 10px;}
+
+/* 左侧列表项 */
 .health-row {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 10px;
-  padding: 14px;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
   text-align: left;
   color: inherit;
-  background: rgba(0, 20, 38, 0.78);
-  border: 1px solid rgba(0, 243, 255, 0.16);
+  background: rgba(0, 20, 38, 0.4);
+  border: 1px solid rgba(0, 243, 255, 0.1);
+  border-radius: 4px;
   cursor: pointer;
+  transition: all 0.2s ease;
 }
-.health-row.active,
-.health-row:hover { border-color: rgba(0, 243, 255, 0.72); background: rgba(0, 243, 255, 0.08); }
-.row-main strong { display: block; color: #fff; }
-.row-main span { display: block; margin-top: 4px; color: rgba(216, 247, 255, 0.54); font-size: 12px; }
+.health-row:hover {
+  border-color: rgba(0, 243, 255, 0.5);
+  background: rgba(0, 243, 255, 0.05);
+}
+.health-row.active {
+  border-color: #00f3ff; 
+  background: rgba(0, 243, 255, 0.12); 
+  box-shadow: inset 3px 0 0 #00f3ff;
+}
+.row-main strong { display: block; color: #fff; font-size: 13px; margin-bottom: 2px;}
+.row-main span { display: block; color: rgba(216, 247, 255, 0.54); font-size: 11px; }
+
+/* 状态徽章 */
 .badge {
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
-  padding: 4px 8px;
+  padding: 2px 6px;
   border: 1px solid currentColor;
+  border-radius: 2px;
   font-size: 11px;
-  font-weight: 800;
 }
 .badge-ok { color: #00ffcc; background: rgba(0, 255, 204, 0.08); }
 .badge-warning { color: #ffaa00; background: rgba(255, 170, 0, 0.08); }
 .badge-error { color: #ff6688; background: rgba(255, 102, 136, 0.08); }
 .badge-info { color: #00f3ff; background: rgba(0, 243, 255, 0.08); }
+
+/* 详情网格 */
 .kv-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 .kv-grid div,
 .artifact-grid div {
-  padding: 12px;
+  padding: 10px 12px;
   background: rgba(0, 10, 20, 0.58);
-  border: 1px solid rgba(0, 243, 255, 0.14);
+  border: 1px solid rgba(0, 243, 255, 0.12);
+  border-radius: 4px;
 }
-label { display: block; margin-bottom: 6px; color: rgba(216, 247, 255, 0.48); font-size: 12px; }
-.mono { font-family: Consolas, monospace; }
-.message { padding: 12px; color: #00f3ff; background: rgba(0, 243, 255, 0.06); border-left: 3px solid #00f3ff; }
+label { display: block; margin-bottom: 4px; color: rgba(216, 247, 255, 0.5); font-size: 11px; }
+.kv-grid strong { font-size: 13px; word-break: break-all; }
+.mono { font-family: Consolas, monospace; font-size: 12px; opacity: 0.8;}
+
+.message { 
+  padding: 10px 12px; 
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: #00f3ff; 
+  background: rgba(0, 243, 255, 0.06); 
+  border-left: 3px solid #00f3ff; 
+  border-radius: 0 4px 4px 0;
+}
+
 .artifact-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: 10px;
 }
+
+/* 代码块 */
 pre {
   margin: 0;
   color: #b8f7ff;
@@ -349,43 +373,24 @@ pre {
   word-break: break-word;
   font-family: Consolas, monospace;
   font-size: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px;
+  border-radius: 2px;
 }
-.empty { color: rgba(216, 247, 255, 0.5); padding: 18px; }
-.run-panel { margin-top: 20px; }
-.run-form { display: flex; gap: 12px; margin-bottom: 18px; }
-.cyber-input {
-  flex: 1;
-  background: rgba(0, 8, 16, 0.92);
-  border: 1px solid rgba(0, 243, 255, 0.3);
-  color: #d8f7ff;
-  padding: 10px 12px;
-  outline: none;
-}
-.run-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(260px, 1fr));
-  gap: 14px;
-}
-.sub-panel { padding: 16px; }
-.sub-panel h4 { margin-bottom: 12px; color: #00f3ff; }
-.sub-panel.wide { grid-column: 1 / -1; }
-.suggestion {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
-  padding: 12px;
-  border: 1px solid rgba(0, 243, 255, 0.18);
-  background: rgba(0, 10, 20, 0.58);
-}
-.suggestion-error { border-color: rgba(255, 102, 136, 0.42); }
-.suggestion-warning { border-color: rgba(255, 170, 0, 0.42); }
-.suggestion-info { border-color: rgba(0, 243, 255, 0.32); }
-.suggestion strong { color: #fff; }
-.suggestion span { color: rgba(216, 247, 255, 0.72); }
+pre::-webkit-scrollbar { width: 4px; }
+pre::-webkit-scrollbar-thumb { background: rgba(0, 243, 255, 0.3); border-radius: 2px;}
+pre::-webkit-scrollbar-track { background: transparent; }
+
+.empty { color: rgba(216, 247, 255, 0.4); padding: 20px; text-align: center; font-size: 12px;}
+
+/* 响应式 */
 @media (max-width: 1100px) {
-  .summary-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
-  .layout-grid { grid-template-columns: 1fr; }
-  .diag-hero { flex-direction: column; align-items: flex-start; }
+  .summary-grid { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+  .diag-hero { flex-direction: column; align-items: flex-start; gap: 12px;}
+  .layout-grid { 
+    grid-template-columns: 1fr !important; 
+  }
 }
 </style>

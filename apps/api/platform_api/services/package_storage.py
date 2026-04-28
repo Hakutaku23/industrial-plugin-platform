@@ -6,11 +6,17 @@ import stat
 import tarfile
 import uuid
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from platform_api.services.manifest import ManifestError, PluginManifest, load_manifest
+from platform_api.services.package_signature import (
+    PluginSignatureError,
+    PluginSignatureVerification,
+    verify_plugin_signature,
+)
 
 
 class PackageStorageError(ValueError):
@@ -22,6 +28,7 @@ class PackageRecord:
     manifest: PluginManifest
     digest: str
     package_dir: Path
+    signature_verification: dict[str, Any] = field(default_factory=dict)
 
 
 class PackageStorage:
@@ -38,6 +45,7 @@ class PackageStorage:
         staging_dir = self.root / "_intake" / f"{digest}-{uuid.uuid4().hex}"
         staging_dir.mkdir(parents=True, exist_ok=False)
         target_dir: Path | None = None
+        signature_verification: PluginSignatureVerification | None = None
         try:
             archive_path = staging_dir / f"upload{suffix}"
             archive_path.write_bytes(content)
@@ -57,16 +65,28 @@ class PackageStorage:
 
             self._validate_entry_exists(package_root, manifest)
             self._validate_checksums(package_root)
+            try:
+                signature_verification = verify_plugin_signature(package_root)
+            except PluginSignatureError as exc:
+                raise PackageStorageError(f"plugin signature verification failed: {exc}") from exc
+
             target_dir = self.root / manifest.metadata.name / manifest.metadata.version / digest[:12]
             if not target_dir.exists():
                 target_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(package_root, target_dir)
+            if signature_verification is not None:
+                self._write_platform_metadata(target_dir, signature_verification)
         finally:
             self._remove_child_dir(staging_dir)
 
         if target_dir is None:
             raise PackageStorageError("plugin package target directory was not resolved")
-        return PackageRecord(manifest=manifest, digest=digest, package_dir=target_dir)
+        return PackageRecord(
+            manifest=manifest,
+            digest=digest,
+            package_dir=target_dir,
+            signature_verification=signature_verification.to_dict() if signature_verification else {},
+        )
 
     def _archive_suffix(self, filename: str) -> str | None:
         lowered = filename.lower()
@@ -108,11 +128,7 @@ class PackageStorage:
         if (extracted_dir / "manifest.yaml").exists():
             return extracted_dir
 
-        entries = [
-            path
-            for path in extracted_dir.iterdir()
-            if path.name not in {"__MACOSX", ".DS_Store"}
-        ]
+        entries = [path for path in extracted_dir.iterdir() if path.name not in {"__MACOSX", ".DS_Store"}]
         directories = [path for path in entries if path.is_dir()]
         files = [path for path in entries if path.is_file()]
         if len(directories) == 1 and not files and (directories[0] / "manifest.yaml").exists():
@@ -146,12 +162,40 @@ class PackageStorage:
             package_init = package_dir / module_rel / "__init__.py"
             if module_file.is_file() or package_init.is_file():
                 return
-            raise PackageStorageError(
-                f"entry module not found: expected {module_file.relative_to(package_dir)} "
-                f"or {package_init.relative_to(package_dir)}"
-            )
+            extension_candidate = self._find_python_extension_module(package_dir=package_dir, module_rel=module_rel)
+            if extension_candidate is not None:
+                return
+            expected = [str(module_file.relative_to(package_dir)), str(package_init.relative_to(package_dir))]
+            expected.extend(str(path.relative_to(package_dir)) for path in self._extension_probe_paths(package_dir, module_rel)[:6])
+            raise PackageStorageError("entry module not found: expected one of " + ", ".join(expected))
 
         raise PackageStorageError(f"unsupported entry.type: {entry_type}")
+
+    def _find_python_extension_module(self, *, package_dir: Path, module_rel: Path) -> Path | None:
+        for path in self._extension_probe_paths(package_dir, module_rel):
+            if path.is_file():
+                return path
+        return None
+
+    def _extension_probe_paths(self, package_dir: Path, module_rel: Path) -> list[Path]:
+        base = package_dir / module_rel
+        parent = base.parent
+        stem = base.name
+        candidates = [(parent / stem).with_suffix(suffix) for suffix in EXTENSION_SUFFIXES]
+        candidates.extend(parent.glob(f"{stem}*.so"))
+        candidates.extend(parent.glob(f"{stem}*.pyd"))
+        result: list[Path] = []
+        seen: set[Path] = set()
+        package_root = package_dir.resolve()
+        for item in candidates:
+            resolved = item.resolve()
+            if resolved in seen:
+                continue
+            if package_root not in resolved.parents and resolved != package_root:
+                continue
+            seen.add(resolved)
+            result.append(item)
+        return result
 
     def _validate_checksums(self, package_dir: Path) -> None:
         checksums_path = package_dir / "checksums.json"
@@ -200,6 +244,14 @@ class PackageStorage:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    def _write_platform_metadata(self, target_dir: Path, signature_verification: PluginSignatureVerification) -> None:
+        metadata_dir = target_dir / ".platform"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        target = metadata_dir / "signature_verification.json"
+        tmp = metadata_dir / "signature_verification.json.tmp"
+        tmp.write_text(json.dumps(signature_verification.to_dict(), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, target)
 
     def _remove_child_dir(self, path: Path) -> None:
         root = self.root.resolve()

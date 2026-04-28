@@ -122,210 +122,379 @@ onMounted(loadAll)
 </script>
 
 <template>
-  <div class="settings-page">
-    <section class="panel">
-      <div class="header-row">
-        <div>
-          <p class="eyebrow">SYSTEM SETTINGS</p>
-          <h2>系统设置</h2>
-          <p class="desc">集中管理维护类运行时配置。安全、许可证、数据库连接等高风险配置仅展示，不支持前端热修改。</p>
-        </div>
-        <div class="actions">
-          <button type="button" class="btn ghost" :disabled="loading" @click="loadAll">刷新</button>
-          <button type="button" class="btn primary" :disabled="saving || loading" @click="saveSettings">保存设置</button>
-        </div>
+  <div class="dp-dashboard-container">
+    
+    <!-- 全局操作栏与标题 -->
+    <header class="dp-header">
+      <div class="dp-header-titles">
+        <h1 class="dp-main-title">系统维护与策略设置</h1>
+        <p class="dp-sub-title">集中管理维护类运行时配置。高风险系统配置仅作数据下发只读展示。</p>
       </div>
-
-      <div v-if="error" class="error">{{ error }}</div>
-      <div v-if="message" class="success">{{ message }}</div>
-
-      <div class="meta-box">
-        <span>设置文件</span>
-        <code>{{ settingsFile }}</code>
+      <div class="dp-header-actions">
+        <button type="button" class="dp-btn-icon" :disabled="loading" @click="loadAll">
+          <span>↻</span> 数据重载
+        </button>
+        <button type="button" class="dp-btn-primary" :disabled="saving || loading" @click="saveSettings">
+          <span>⎘</span> 下发保存设置
+        </button>
       </div>
+    </header>
 
-      <div class="grid-two">
-        <article class="card">
-          <div class="card-head">
-            <h3>runs 目录清理</h3>
-            <span>var/runs/run-*</span>
-          </div>
-          <div class="form-list">
-            <label v-for="item in runDirItems" :key="item.path" class="field">
-              <div class="field-label">
-                <strong>{{ item.label }}</strong>
-                <small>{{ item.description }}</small>
-              </div>
+    <!-- 告警与通知 -->
+    <div v-if="error" class="dp-alert dp-alert-error"><span class="blink">⚠</span> ERROR: {{ error }}</div>
+    <div v-if="message" class="dp-alert dp-alert-success"><span class="blink">✔</span> SUCCESS: {{ message }}</div>
+
+    <!-- 顶部状态栏 -->
+    <div class="dp-meta-strip">
+      <span class="dp-meta-label">当前活跃配置域文件 (Settings File) :</span>
+      <span class="dp-meta-value">{{ settingsFile || '加载中...' }}</span>
+    </div>
+
+    <!-- 核心布局：双列清理配置 -->
+    <div class="dp-layout-grid-2 dp-mt-4">
+      
+      <!-- 模块 1：runs 目录清理 -->
+      <article class="dp-panel">
+        <div class="dp-panel-title">[ 运行时缓存目录清理策略 ]</div>
+        <div class="dp-panel-subtitle">Target Dir: <span class="highlight-cyan">var/runs/run-*</span></div>
+        
+        <div class="dp-form-list">
+          <label v-for="item in runDirItems" :key="item.path" class="dp-field-row">
+            <div class="field-info">
+              <span class="field-label">{{ item.label }}</span>
+              <span class="field-desc">{{ item.description }}</span>
+            </div>
+            <div class="field-input">
               <input
                 v-if="item.type === 'bool'"
                 type="checkbox"
+                class="dp-checkbox"
                 :checked="Boolean(inputValue(item.path))"
                 @change="updateValue(item, $event)"
               />
               <input
                 v-else
+                class="dp-input"
                 :type="item.type === 'str' ? 'text' : 'number'"
                 :min="item.minimum ?? undefined"
                 :max="item.maximum ?? undefined"
                 :value="inputValue(item.path)"
                 @input="updateValue(item, $event)"
               />
-            </label>
-          </div>
-          <div class="button-row">
-            <button class="btn ghost" :disabled="saving" @click="runCleanup('runs', true)">演练清理</button>
-            <button class="btn danger" :disabled="saving" @click="runCleanup('runs', false)">立即清理</button>
-          </div>
-          <pre class="report">{{ JSON.stringify(status?.run_directory_cleanup || {}, null, 2) }}</pre>
-        </article>
-
-        <article class="card">
-          <div class="card-head">
-            <h3>数据库历史记录清理</h3>
-            <span>plugin_runs / run_logs / writeback_records / audit_events</span>
-          </div>
-          <div class="form-list">
-            <label v-for="item in dbItems" :key="item.path" class="field">
-              <div class="field-label">
-                <strong>{{ item.label }}</strong>
-                <small>{{ item.description }}</small>
-              </div>
-              <input
-                v-if="item.type === 'bool'"
-                type="checkbox"
-                :checked="Boolean(inputValue(item.path))"
-                @change="updateValue(item, $event)"
-              />
-              <input
-                v-else
-                :type="item.type === 'str' ? 'text' : 'number'"
-                :min="item.minimum ?? undefined"
-                :max="item.maximum ?? undefined"
-                :value="inputValue(item.path)"
-                @input="updateValue(item, $event)"
-              />
-            </label>
-          </div>
-          <div class="button-row">
-            <button class="btn ghost" :disabled="saving" @click="runCleanup('db', true)">演练清理</button>
-            <button class="btn danger" :disabled="saving" @click="runCleanup('db', false)">立即清理</button>
-          </div>
-          <pre class="report">{{ JSON.stringify(status?.database_cleanup || {}, null, 2) }}</pre>
-        </article>
-      </div>
-
-      <article class="card readonly-card">
-        <div class="card-head">
-          <h3>静态系统配置扫描</h3>
-          <span>只读展示；这些配置建议通过环境变量或 config/platform.yaml 管理</span>
+            </div>
+          </label>
         </div>
-        <div class="readonly-grid">
-          <div v-for="item in runtimeReadonly" :key="item.path" class="readonly-item">
-            <span>{{ item.label }}</span>
-            <strong>{{ formatValue(item.value) }}</strong>
-            <small>{{ item.path }}</small>
-          </div>
+
+        <div class="dp-action-bar">
+          <button class="dp-btn dp-btn-ghost" :disabled="saving" @click="runCleanup('runs', true)">
+            <span>⚗</span> 模拟演练 (Dry Run)
+          </button>
+          <button class="dp-btn dp-btn-danger" :disabled="saving" @click="runCleanup('runs', false)">
+            <span>⚡</span> 强制执行清理
+          </button>
+        </div>
+
+        <div class="dp-terminal">
+          <div class="dp-terminal-header">>&nbsp;Task_Output: [ Runs_Cleanup_Report ]</div>
+          <pre class="dp-terminal-body">{{ JSON.stringify(status?.run_directory_cleanup || {}, null, 2) }}</pre>
         </div>
       </article>
-    </section>
+
+      <!-- 模块 2：数据库历史记录清理 -->
+      <article class="dp-panel">
+        <div class="dp-panel-title">[ 数据库历史游标与归档清理 ]</div>
+        <div class="dp-panel-subtitle">Target Tables: <span class="highlight-cyan">plugin_runs / run_logs / audit_events</span></div>
+        
+        <div class="dp-form-list">
+          <label v-for="item in dbItems" :key="item.path" class="dp-field-row">
+            <div class="field-info">
+              <span class="field-label">{{ item.label }}</span>
+              <span class="field-desc">{{ item.description }}</span>
+            </div>
+            <div class="field-input">
+              <input
+                v-if="item.type === 'bool'"
+                type="checkbox"
+                class="dp-checkbox"
+                :checked="Boolean(inputValue(item.path))"
+                @change="updateValue(item, $event)"
+              />
+              <input
+                v-else
+                class="dp-input"
+                :type="item.type === 'str' ? 'text' : 'number'"
+                :min="item.minimum ?? undefined"
+                :max="item.maximum ?? undefined"
+                :value="inputValue(item.path)"
+                @input="updateValue(item, $event)"
+              />
+            </div>
+          </label>
+        </div>
+
+        <div class="dp-action-bar">
+          <button class="dp-btn dp-btn-ghost" :disabled="saving" @click="runCleanup('db', true)">
+            <span>⚗</span> 模拟演练 (Dry Run)
+          </button>
+          <button class="dp-btn dp-btn-danger" :disabled="saving" @click="runCleanup('db', false)">
+            <span>⚡</span> 强制执行清理
+          </button>
+        </div>
+
+        <div class="dp-terminal">
+          <div class="dp-terminal-header">>&nbsp;Task_Output: [ DB_Cleanup_Report ]</div>
+          <pre class="dp-terminal-body">{{ JSON.stringify(status?.database_cleanup || {}, null, 2) }}</pre>
+        </div>
+      </article>
+    </div>
+
+    <!-- 模块 3：静态配置 (只读) -->
+    <article class="dp-panel dp-mt-4">
+      <div class="dp-panel-title">[ 静态系统配置扫描矩阵 ]</div>
+      <div class="dp-panel-subtitle dp-text-warn">※ 当前状态：READ_ONLY | 配置应由底层环境变量或 config/platform.yaml 覆盖接管。</div>
+      
+      <div class="dp-readonly-grid">
+        <div v-for="item in runtimeReadonly" :key="item.path" class="dp-readonly-card">
+          <div class="ro-label">{{ item.label }}</div>
+          <div class="ro-value" :title="formatValue(item.value)">{{ formatValue(item.value) }}</div>
+          <div class="ro-path">{{ item.path }}</div>
+        </div>
+      </div>
+    </article>
+
   </div>
 </template>
 
 <style scoped>
-.settings-page {
+/* =========================================
+   赛博工业大屏 主题与基础变量
+   ========================================= */
+.dp-dashboard-container {
+  --dp-bg-base: #010A14;        
+  --dp-bg-panel: rgba(2, 17, 34, 0.75); 
+  --dp-cyan-main: #00F2FE;      
+  --dp-cyan-dark: rgba(0, 242, 254, 0.15); 
+  --dp-cyan-border: rgba(0, 242, 254, 0.35);
+  
+  --dp-text-main: #E5EAF3;      
+  --dp-text-label: #6B8B9E;     
+  --dp-text-muted: #4B6373;
+  
+  --dp-color-success: #00FFB2;  
+  --dp-color-warn: #FDB100;     
+  --dp-color-error: #FF4D4F;    
+
   min-height: 100vh;
-  padding: 34px;
-  color: #d9f7ff;
-  background:
-    linear-gradient(rgba(0, 243, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 243, 255, 0.035) 1px, transparent 1px),
-    #030a16;
-  background-size: 32px 32px;
+  padding: 24px;
+  background-color: var(--dp-bg-base);
+  background-image: 
+    linear-gradient(rgba(0, 242, 254, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 242, 254, 0.03) 1px, transparent 1px);
+  background-size: 30px 30px;
+  color: var(--dp-text-main);
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  box-sizing: border-box;
 }
-.panel {
-  max-width: 1480px;
-  margin: 0 auto;
-  padding: 30px;
-  background: rgba(2, 18, 38, 0.78);
-  border: 1px solid rgba(0, 243, 255, 0.28);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
-}
-.header-row, .card-head, .button-row {
+
+*, *::before, *::after { box-sizing: inherit; }
+
+.dp-mt-4 { margin-top: 24px; }
+.highlight-cyan { color: var(--dp-cyan-main); font-family: monospace; }
+.dp-text-warn { color: var(--dp-color-warn); font-size: 12px; }
+
+/* =========================================
+   头部与通知区域
+   ========================================= */
+.dp-header {
   display: flex;
   justify-content: space-between;
-  gap: 18px;
   align-items: center;
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--dp-cyan-border);
+  position: relative;
 }
-.eyebrow { color: #00f3ff; letter-spacing: 3px; font-size: 11px; margin: 0 0 8px; }
-h2 { margin: 0 0 8px; color: #fff; }
-.desc { margin: 0; color: rgba(217, 247, 255, 0.65); font-size: 13px; }
-.actions, .button-row { display: flex; gap: 12px; }
-.btn {
-  border: 1px solid rgba(0, 243, 255, 0.45);
-  background: rgba(0, 243, 255, 0.06);
-  color: #00f3ff;
-  padding: 9px 16px;
-  cursor: pointer;
-  font-weight: 800;
+.dp-header::after {
+  content: ''; position: absolute; bottom: -1px; left: 0;
+  width: 120px; height: 2px;
+  background: var(--dp-cyan-main); box-shadow: 0 0 10px var(--dp-cyan-main);
 }
-.btn.primary { background: #00f3ff; color: #001018; }
-.btn.danger { border-color: rgba(255, 83, 112, 0.7); color: #ff7890; background: rgba(255, 83, 112, 0.08); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.error, .success, .meta-box { margin-top: 18px; padding: 12px 14px; border: 1px solid; }
-.error { color: #ff7890; border-color: rgba(255, 83, 112, 0.45); background: rgba(255, 83, 112, 0.08); }
-.success { color: #00ffcc; border-color: rgba(0, 255, 204, 0.45); background: rgba(0, 255, 204, 0.08); }
-.meta-box { display: flex; gap: 12px; align-items: center; border-color: rgba(0, 243, 255, 0.2); color: rgba(217,247,255,.72); }
-code { color: #00f3ff; overflow-wrap: anywhere; }
-.grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 22px; }
-.card {
-  padding: 20px;
-  background: rgba(1, 10, 18, 0.72);
-  border: 1px solid rgba(0, 243, 255, 0.22);
+.dp-main-title { margin: 0; font-size: 24px; color: var(--dp-cyan-main); letter-spacing: 2px; text-shadow: 0 0 8px rgba(0, 242, 254, 0.4); }
+.dp-sub-title { margin: 6px 0 0; font-size: 13px; color: var(--dp-text-label); }
+
+.dp-header-actions { display: flex; gap: 12px; }
+.dp-btn-icon, .dp-btn-primary {
+  padding: 8px 18px;
+  font-size: 13px; font-weight: bold;
+  cursor: pointer; display: flex; align-items: center; gap: 6px;
+  transition: all 0.2s; border-radius: 2px;
 }
-.card h3 { margin: 0; color: #fff; }
-.card-head span { color: rgba(217, 247, 255, 0.55); font-size: 12px; text-align: right; }
-.form-list { display: grid; gap: 12px; margin: 18px 0; }
-.field {
+.dp-btn-icon {
+  background: transparent; border: 1px solid var(--dp-cyan-border); color: var(--dp-cyan-main);
+}
+.dp-btn-icon:hover:not(:disabled) { background: var(--dp-cyan-dark); box-shadow: 0 0 8px var(--dp-cyan-dark); }
+.dp-btn-primary {
+  background: var(--dp-cyan-main); border: 1px solid var(--dp-cyan-main); color: #000;
+}
+.dp-btn-primary:hover:not(:disabled) { box-shadow: 0 0 15px var(--dp-cyan-dark); opacity: 0.9; }
+button:disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(1); }
+
+.dp-alert { padding: 10px 16px; margin-bottom: 20px; font-size: 13px; border-left: 3px solid; background: rgba(0,0,0,0.4); }
+.dp-alert-error { border-color: var(--dp-color-error); color: var(--dp-color-error); background: rgba(255, 77, 79, 0.1); }
+.dp-alert-success { border-color: var(--dp-color-success); color: var(--dp-color-success); background: rgba(0, 255, 178, 0.1); }
+.blink { animation: dp-blink 1.5s infinite; margin-right: 8px; font-weight: bold; }
+@keyframes dp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* 信息条 */
+.dp-meta-strip {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; margin-bottom: 24px;
+  background: rgba(0, 242, 254, 0.05);
+  border: 1px solid var(--dp-cyan-border);
+  border-left: 4px solid var(--dp-cyan-main);
+}
+.dp-meta-label { color: var(--dp-text-label); font-size: 13px; }
+.dp-meta-value { color: var(--dp-cyan-main); font-family: monospace; font-size: 14px; }
+
+/* =========================================
+   网格与面板组件
+   ========================================= */
+.dp-layout-grid-2 {
   display: grid;
-  grid-template-columns: 1fr 180px;
-  gap: 16px;
-  align-items: center;
-  padding: 12px;
-  background: rgba(0, 243, 255, 0.035);
-  border: 1px solid rgba(0, 243, 255, 0.12);
+  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+  gap: 24px;
 }
-.field-label { display: grid; gap: 4px; }
-.field-label small { color: rgba(217, 247, 255, 0.55); }
-input[type='number'], input[type='text'] {
+.dp-panel {
+  background: var(--dp-bg-panel);
+  border: 1px solid var(--dp-cyan-border);
+  padding: 24px; position: relative;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.4);
+}
+.dp-panel::before {
+  content: ''; position: absolute; top: -1px; left: -1px; width: 12px; height: 12px;
+  border-top: 2px solid var(--dp-cyan-main); border-left: 2px solid var(--dp-cyan-main);
+}
+.dp-panel::after {
+  content: ''; position: absolute; bottom: -1px; right: -1px; width: 12px; height: 12px;
+  border-bottom: 2px solid var(--dp-cyan-main); border-right: 2px solid var(--dp-cyan-main);
+}
+.dp-panel-title { font-size: 15px; color: var(--dp-cyan-main); font-weight: bold; margin-bottom: 6px; letter-spacing: 1px; }
+.dp-panel-subtitle { font-size: 12px; color: var(--dp-text-label); margin-bottom: 20px; }
+
+/* =========================================
+   表单列表与工业化控件
+   ========================================= */
+.dp-form-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+.dp-field-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(107, 139, 158, 0.2);
+  transition: border-color 0.2s;
+}
+.dp-field-row:hover { border-color: var(--dp-cyan-border); }
+.field-info { display: flex; flex-direction: column; gap: 4px; max-width: 65%; }
+.field-label { font-size: 14px; color: var(--dp-text-main); font-weight: bold; }
+.field-desc { font-size: 11px; color: var(--dp-text-muted); }
+.field-input { width: 160px; display: flex; justify-content: flex-end; }
+
+/* 赛博风输入框 */
+.dp-input {
   width: 100%;
-  box-sizing: border-box;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(0, 243, 255, 0.32);
-  color: #d9f7ff;
-  padding: 8px 10px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--dp-cyan-border);
+  color: var(--dp-cyan-main);
+  padding: 8px 12px;
+  font-family: monospace; font-size: 14px;
+  outline: none; transition: all 0.3s;
 }
-input[type='checkbox'] { width: 22px; height: 22px; justify-self: end; accent-color: #00f3ff; }
-.report {
-  min-height: 110px;
-  max-height: 220px;
-  overflow: auto;
-  margin: 16px 0 0;
-  padding: 12px;
-  color: #98f7ff;
-  background: rgba(0, 0, 0, 0.32);
-  border: 1px solid rgba(0, 243, 255, 0.16);
-  font-size: 12px;
+.dp-input:focus { border-color: var(--dp-cyan-main); box-shadow: 0 0 10px var(--dp-cyan-dark); }
+
+/* 赛博风复选框 */
+.dp-checkbox {
+  appearance: none;
+  width: 24px; height: 24px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--dp-cyan-border);
+  cursor: pointer; position: relative;
+  transition: all 0.2s;
 }
-.readonly-card { margin-top: 20px; }
-.readonly-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
-.readonly-item { display: grid; gap: 5px; padding: 12px; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08); }
-.readonly-item span { color: rgba(217,247,255,.72); }
-.readonly-item strong { color: #fff; overflow-wrap: anywhere; }
-.readonly-item small { color: rgba(217,247,255,.38); overflow-wrap: anywhere; }
-@media (max-width: 1100px) {
-  .grid-two, .readonly-grid { grid-template-columns: 1fr; }
-  .header-row, .card-head { align-items: flex-start; flex-direction: column; }
-  .field { grid-template-columns: 1fr; }
-  input[type='checkbox'] { justify-self: start; }
+.dp-checkbox:checked {
+  background: var(--dp-cyan-dark);
+  border-color: var(--dp-cyan-main);
+  box-shadow: 0 0 8px var(--dp-cyan-dark);
+}
+.dp-checkbox:checked::after {
+  content: '✔';
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--dp-cyan-main); font-size: 14px;
+}
+
+/* =========================================
+   卡片内操作按钮
+   ========================================= */
+.dp-action-bar { display: flex; justify-content: flex-end; gap: 12px; margin-bottom: 20px; border-top: 1px dashed rgba(107, 139, 158, 0.3); padding-top: 20px; }
+.dp-btn {
+  padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; border: 1px solid transparent; transition: all 0.2s;
+}
+.dp-btn-ghost { background: rgba(0, 242, 254, 0.05); border-color: var(--dp-cyan-border); color: var(--dp-cyan-main); }
+.dp-btn-ghost:hover:not(:disabled) { background: var(--dp-cyan-dark); }
+.dp-btn-danger { background: rgba(255, 77, 79, 0.05); border-color: rgba(255, 77, 79, 0.5); color: var(--dp-color-error); }
+.dp-btn-danger:hover:not(:disabled) { background: rgba(255, 77, 79, 0.2); }
+
+/* =========================================
+   终端输出窗口 (Terminal Logs)
+   ========================================= */
+.dp-terminal {
+  background: #02070D;
+  border: 1px solid rgba(107, 139, 158, 0.4);
+  border-radius: 2px;
+}
+.dp-terminal-header {
+  padding: 6px 12px;
+  background: rgba(255,255,255,0.05);
+  border-bottom: 1px solid rgba(107, 139, 158, 0.3);
+  font-family: monospace; font-size: 11px; color: var(--dp-text-muted);
+}
+.dp-terminal-body {
+  margin: 0; padding: 12px;
+  font-family: "Courier New", monospace; font-size: 12px;
+  color: var(--dp-color-success);
+  min-height: 80px; max-height: 180px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+/* 终端滚动条优化 */
+.dp-terminal-body::-webkit-scrollbar { width: 6px; }
+.dp-terminal-body::-webkit-scrollbar-thumb { background: var(--dp-text-muted); border-radius: 3px; }
+
+/* =========================================
+   只读静态配置卡片流
+   ========================================= */
+.dp-readonly-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+.dp-readonly-card {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(107, 139, 158, 0.2);
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+  transition: all 0.2s;
+  border-left: 2px solid transparent;
+}
+.dp-readonly-card:hover { background: rgba(255,255,255,0.03); border-left-color: var(--dp-cyan-main); }
+.ro-label { font-size: 12px; color: var(--dp-text-label); }
+.ro-value { font-size: 15px; color: #fff; font-family: monospace; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ro-path { font-size: 11px; color: var(--dp-text-muted); padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); word-break: break-all; }
+
+/* 响应式降级 */
+@media (max-width: 1024px) {
+  .dp-layout-grid-2 { grid-template-columns: 1fr; }
+  .dp-field-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .field-info { max-width: 100%; }
+  .field-input { width: 100%; justify-content: flex-start; }
 }
 </style>

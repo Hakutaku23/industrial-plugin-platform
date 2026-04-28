@@ -1,0 +1,11 @@
+{
+  "schema": "ipp-plugin-trusted-keys/v1",
+  "keys": [
+    {
+      "key_id": "factory-dev-2026-01",
+      "algorithm": "ed25519",
+      "public_key": "replace_with_base64_public_key",
+      "status": "active"
+    }
+  ]
+}

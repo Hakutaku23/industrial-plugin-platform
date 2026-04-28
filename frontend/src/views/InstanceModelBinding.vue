@@ -231,364 +231,587 @@ onMounted(loadAll)
 </script>
 
 <template>
-  <div class="cyber-container">
-    <section class="panel">
-      <div class="corner-tl"></div><div class="corner-tr"></div>
-      <div class="corner-bl"></div><div class="corner-br"></div>
-
-      <div class="intro">
-        <div>
-          <p class="eyebrow">INSTANCE MODEL BINDING</p>
-          <h2 class="page-title">实例模型绑定</h2>
-          <p class="page-desc">只允许绑定 family_fingerprint 与插件声明一致的模型；健康检查会同步检查 active 版本、固定版本、artifact 文件与 checksum。</p>
-        </div>
-        <div class="intro-actions">
-          <button type="button" class="cyber-button-outline" :disabled="loading" @click="loadAll">刷新</button>
-          <button type="button" class="cyber-button-outline" :disabled="healthLoading || !selectedInstanceId" @click="loadHealth">健康检查</button>
-        </div>
+  <div class="dp-dashboard-container">
+    
+    <!-- 全局操作栏与标题 (仿大屏顶部) -->
+    <header class="dp-header">
+      <div class="dp-header-titles">
+        <h1 class="dp-main-title">实例模型绑定与管控</h1>
+        <p class="dp-sub-title">确保 family_fingerprint 一致性校验与运行期健康监控</p>
       </div>
+      <div class="dp-header-actions">
+        <button type="button" class="dp-btn-icon" :disabled="loading" @click="loadAll">
+          <span>↻</span> 实时刷新
+        </button>
+        <button type="button" class="dp-btn-icon" :disabled="healthLoading || !selectedInstanceId" @click="loadHealth">
+          <span>☤</span> 健康检查
+        </button>
+      </div>
+    </header>
 
-      <div v-if="error" class="error-banner"><span class="blink">!</span> ERROR: {{ error }}</div>
-      <div v-if="message" class="success-banner">{{ message }}</div>
+    <!-- 顶部消息通知栏 -->
+    <div v-if="error" class="dp-alert dp-alert-error"><span class="blink">⚠</span> {{ error }}</div>
+    <div v-if="message" class="dp-alert dp-alert-success"><span class="blink">✔</span> {{ message }}</div>
 
-      <div class="layout-grid">
-        <aside class="instance-list">
-          <div class="section-tag">实例列表</div>
+    <div class="dp-layout-grid">
+      
+      <!-- 左侧：实例列表面板 -->
+      <aside class="dp-panel dp-col-left">
+        <div class="dp-panel-title">[ 插件实例列表 ]</div>
+        <div class="dp-instance-list">
           <button
             v-for="item in instances"
             :key="item.id"
             type="button"
-            class="instance-card"
+            class="dp-instance-item"
             :class="{ active: selectedInstanceId === item.id }"
             @click="selectedInstanceId = item.id"
           >
-            <span class="name">{{ item.name }}</span>
-            <span class="meta">{{ item.package_name }}@{{ item.version }}</span>
-            <span class="status" :class="statusClass(item.status)">{{ item.status }}</span>
+            <div class="item-main">
+              <span class="item-name">{{ item.name }}</span>
+              <span class="item-status" :class="statusClass(item.status)">
+                <i class="status-dot"></i>{{ item.status }}
+              </span>
+            </div>
+            <div class="item-meta">{{ item.package_name }}@{{ item.version }}</div>
           </button>
-          <div v-if="!instances.length && !loading" class="empty">暂无实例</div>
-        </aside>
+          <div v-if="!instances.length && !loading" class="dp-empty-state">当前集群暂无排队或冲突任务，且无实例数据</div>
+        </div>
+      </aside>
 
-        <main class="binding-panel">
-          <div class="section-tag">绑定配置</div>
+      <!-- 右侧：详情与配置管控面板 -->
+      <main class="dp-col-right">
+        
+        <!-- 上半部分两列：基础信息 & 健康状态 -->
+        <div class="dp-inner-grid-2">
+          
+          <!-- 基础运行信息与插件要求 -->
+          <section class="dp-panel">
+            <div class="dp-panel-title">[ 基础运行信息 ]</div>
+            <div class="dp-kv-list" v-if="selectedInstance">
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">当前实例</span>
+                <span class="dp-kv-value highlight-cyan">{{ selectedInstance.name }}</span>
+              </div>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">插件版本</span>
+                <span class="dp-kv-value">{{ selectedInstance.package_name }}@{{ selectedInstance.version }}</span>
+              </div>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">声明的模型指纹</span>
+                <span class="dp-kv-value highlight-code" v-if="requiredFingerprint">{{ requiredFingerprint }}</span>
+                <span class="dp-kv-value dp-text-error" v-else>未声明依赖，禁止绑定</span>
+              </div>
+              <div class="dp-kv-row" v-if="!requiredFingerprint">
+                <span class="dp-kv-label">指纹读取状态</span>
+                <span class="dp-kv-value dp-text-muted">{{ requirement?.message || '尚未读取' }}</span>
+              </div>
+            </div>
+            <div v-else class="dp-empty-state">请在左侧选择实例</div>
+          </section>
 
-          <div v-if="selectedInstance" class="selected-box">
-            <label>当前实例</label>
-            <strong>{{ selectedInstance.name }}</strong>
-            <span>{{ selectedInstance.package_name }}@{{ selectedInstance.version }}</span>
+          <!-- 健康状态面板 -->
+          <section class="dp-panel">
+            <div class="dp-panel-title">[ 集群任务锁状态 / 健康度 ]</div>
+            <div class="dp-health-board" :class="healthStatusClass">
+              <div class="health-header">
+                <div class="health-title">{{ healthTitle }}</div>
+                <div class="health-badge">{{ healthLoading ? 'CHECKING...' : (health?.status || 'UNKNOWN') }}</div>
+              </div>
+              
+              <div class="health-body">
+                <p v-if="health?.healthy" class="health-ok-text">
+                  <span class="icon-check">✔</span> 运行前模型绑定校验已通过。
+                </p>
+                
+                <div v-if="health?.errors?.length" class="dp-issue-box">
+                  <div v-for="item in health.errors" :key="`${item.code}:${item.message}`" class="issue-item issue-error">
+                    <span class="issue-code">{{ item.code }}</span>
+                    <span class="issue-msg">{{ item.message }}</span>
+                  </div>
+                </div>
+                
+                <div v-if="health?.warnings?.length" class="dp-issue-box">
+                  <div v-for="item in health.warnings" :key="`${item.code}:${item.message}`" class="issue-item issue-warn">
+                    <span class="issue-code">{{ item.code }}</span>
+                    <span class="issue-msg">{{ item.message }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 中间：核心绑定配置 -->
+        <section class="dp-panel dp-mt-4">
+          <div class="dp-panel-title">[ 模型调度与绑定配置 ]</div>
+          
+          <div v-if="requiredFingerprint && compatibleModels.length === 0" class="dp-alert dp-alert-warn dp-mb-4">
+            系统未匹配到指纹为 {{ requiredFingerprint }} 的模型。请上传对应模型包。
           </div>
 
-          <div class="health-card" :class="healthStatusClass">
-            <div class="health-head">
-              <div>
-                <label>绑定健康状态</label>
-                <strong>{{ healthTitle }}</strong>
-              </div>
-              <span class="health-badge">{{ healthLoading ? 'CHECKING' : (health?.status || 'UNKNOWN') }}</span>
-            </div>
-            <div v-if="health?.errors?.length" class="issue-list">
-              <div v-for="item in health.errors" :key="`${item.code}:${item.message}`" class="issue-item" :class="issueClass(item)">
-                <code>{{ item.code }}</code>
-                <span>{{ item.message }}</span>
+          <div class="dp-form-row">
+            <div class="dp-form-group">
+              <label class="dp-form-label">兼容模型分配</label>
+              <div class="dp-select-wrapper">
+                <select v-model.number="selectedModelId" :disabled="!requiredFingerprint" class="dp-select">
+                  <option :value="null">-- 等待分配 --</option>
+                  <option v-for="model in compatibleModels" :key="model.id" :value="model.id">
+                    {{ model.display_name || model.model_name }} [Active: {{ model.active_version || '未上线' }}]
+                  </option>
+                </select>
               </div>
             </div>
-            <div v-if="health?.warnings?.length" class="issue-list">
-              <div v-for="item in health.warnings" :key="`${item.code}:${item.message}`" class="issue-item issue-warn">
-                <code>{{ item.code }}</code>
-                <span>{{ item.message }}</span>
+
+            <div class="dp-form-group">
+              <label class="dp-form-label">版本调度策略</label>
+              <div class="dp-select-wrapper">
+                <select v-model="bindingMode" :disabled="!requiredFingerprint" class="dp-select">
+                  <option value="current">动态跟随 Active 版本</option>
+                  <option value="fixed_version">静态锁定特定版本</option>
+                </select>
               </div>
             </div>
-            <p v-if="health?.healthy" class="health-ok-text">运行前模型绑定校验通过。</p>
-          </div>
 
-          <div class="requirement-box" :class="{ blocked: !requiredFingerprint }">
-            <label>插件声明的模型指纹</label>
-            <code v-if="requiredFingerprint">{{ requiredFingerprint }}</code>
-            <strong v-else>未声明 modelDependency.familyFingerprint，禁止绑定模型</strong>
-            <span>{{ requirement?.message || '尚未读取插件模型依赖声明' }}</span>
-          </div>
-
-          <div class="form-grid">
-            <label class="field">
-              <span>兼容模型</span>
-              <select v-model.number="selectedModelId" :disabled="!requiredFingerprint">
-                <option :value="null">请选择模型</option>
-                <option v-for="model in compatibleModels" :key="model.id" :value="model.id">
-                  {{ model.display_name || model.model_name }} / active: {{ model.active_version || '未上线' }}
-                </option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span>绑定模式</span>
-              <select v-model="bindingMode" :disabled="!requiredFingerprint">
-                <option value="current">跟随当前 active 版本</option>
-                <option value="fixed_version">固定指定模型版本</option>
-              </select>
-            </label>
-
-            <label v-if="bindingMode === 'fixed_version'" class="field full">
-              <span>固定版本</span>
-              <select v-model.number="selectedVersionId">
-                <option :value="null">请选择模型版本</option>
-                <option v-for="version in versions" :key="version.id" :value="version.id">
-                  {{ version.version }} / {{ version.status }} / {{ version.created_at }}
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div v-if="requiredFingerprint && compatibleModels.length === 0" class="warning-panel">
-            没有发现与该插件 family_fingerprint 匹配的模型。请上传模型包，并确保模型包中的 model_family.family_fingerprint 与插件声明一致。
-          </div>
-
-          <div v-if="selectedModel" class="model-summary">
-            <div>
-              <label>模型名称</label>
-              <strong>{{ selectedModel.model_name }}</strong>
-            </div>
-            <div>
-              <label>active 版本</label>
-              <strong>{{ activeVersionLabel }}</strong>
-            </div>
-            <div>
-              <label>模型状态</label>
-              <strong :class="statusClass(selectedModel.status)">{{ selectedModel.status }}</strong>
-            </div>
-            <div class="full">
-              <label>family_fingerprint</label>
-              <code>{{ selectedModel.family_fingerprint }}</code>
+            <div class="dp-form-group" v-if="bindingMode === 'fixed_version'">
+              <label class="dp-form-label">锁定版本号</label>
+              <div class="dp-select-wrapper">
+                <select v-model.number="selectedVersionId" class="dp-select">
+                  <option :value="null">-- 选择固定版本 --</option>
+                  <option v-for="version in versions" :key="version.id" :value="version.id">
+                    v{{ version.version }} ({{ version.status }})
+                  </option>
+                </select>
+              </div>
             </div>
           </div>
+          
+          <div class="dp-action-bar">
+            <button type="button" class="dp-btn dp-btn-danger" :disabled="saving || !currentBinding" @click="clearBinding">
+              <span class="icon">⊘</span> 强制解除绑定
+            </button>
+            <button type="button" class="dp-btn dp-btn-primary" :disabled="saving || !canBind" @click="submitBinding">
+              <span class="icon">⎘</span> {{ saving ? '系统执行中...' : '提交策略生效' }}
+            </button>
+          </div>
+        </section>
 
-          <div v-if="currentBinding" class="current-binding">
-            <div class="section-tag">当前绑定</div>
-            <div class="binding-grid">
-              <div>
-                <label>模型</label>
-                <span>{{ currentBinding.model_name }}</span>
+        <!-- 底部两列：模型详细信息与当前绑定快照 -->
+        <div class="dp-inner-grid-2 dp-mt-4">
+          <section class="dp-panel">
+            <div class="dp-panel-title">[ 目标模型信息快照 ]</div>
+            <div class="dp-kv-list" v-if="selectedModel">
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">模型标识</span>
+                <span class="dp-kv-value">{{ selectedModel.model_name }}</span>
               </div>
-              <div>
-                <label>模式</label>
-                <span>{{ currentBinding.binding_mode }}</span>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">Active 状态码</span>
+                <span class="dp-kv-value highlight-cyan">{{ activeVersionLabel }}</span>
               </div>
-              <div>
-                <label>固定版本 ID</label>
-                <span>{{ currentBinding.model_version_id ?? '-' }}</span>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">指纹校验码 (Fingerprint)</span>
+                <span class="dp-kv-value highlight-code">{{ selectedModel.family_fingerprint }}</span>
               </div>
-              <div>
-                <label>指纹校验</label>
-                <span :class="currentBinding.fingerprint_match ? 'status-online' : 'status-warn'">
-                  {{ currentBinding.fingerprint_match ? 'MATCH' : 'UNKNOWN / MISMATCH' }}
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">系统运行状态</span>
+                <span class="dp-kv-value" :class="statusClass(selectedModel.status)">{{ selectedModel.status }}</span>
+              </div>
+            </div>
+            <div v-else class="dp-empty-state">待选定目标模型</div>
+          </section>
+
+          <section class="dp-panel">
+            <div class="dp-panel-title">[ 实时任务执行流水 (当前绑定) ]</div>
+            <div class="dp-kv-list" v-if="currentBinding">
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">绑定模型</span>
+                <span class="dp-kv-value">{{ currentBinding.model_name }}</span>
+              </div>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">运行模式</span>
+                <span class="dp-kv-value">{{ currentBinding.binding_mode }}</span>
+              </div>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">锁定版本 ID</span>
+                <span class="dp-kv-value">{{ currentBinding.model_version_id ?? '动态跟随 (NULL)' }}</span>
+              </div>
+              <div class="dp-kv-row">
+                <span class="dp-kv-label">指纹一致性监测</span>
+                <span class="dp-kv-value" :class="currentBinding.fingerprint_match ? 'status-online' : 'status-warn'">
+                  {{ currentBinding.fingerprint_match ? '● 校验通过 (MATCH)' : '▲ 异常 (MISMATCH)' }}
                 </span>
               </div>
-              <div class="full">
-                <label>模型指纹</label>
-                <code>{{ currentBinding.family_fingerprint }}</code>
-              </div>
             </div>
-          </div>
+            <div v-else class="dp-empty-state">当前节点无排队或绑定策略</div>
+          </section>
+        </div>
 
-          <details v-if="health" class="raw-details">
-            <summary>查看健康检查原始数据</summary>
-            <pre>{{ stringify(health) }}</pre>
-          </details>
+        <!-- 隐藏的调试信息 -->
+        <details v-if="health" class="dp-raw-details dp-mt-4">
+          <summary>[ 展开终端调试日志 (Raw Health Data) ]</summary>
+          <pre>{{ stringify(health) }}</pre>
+        </details>
 
-          <div class="action-row">
-            <button type="button" class="cyber-submit-btn" :disabled="saving || !canBind" @click="submitBinding">
-              {{ saving ? '保存中...' : '保存绑定' }}
-            </button>
-            <button type="button" class="danger-btn" :disabled="saving || !currentBinding" @click="clearBinding">
-              解除绑定
-            </button>
-          </div>
-        </main>
-      </div>
-
-      <div class="hint-panel">
-        <div class="section-tag">插件声明示例</div>
-        <pre>modelDependency:
-  required: true
-  familyFingerprint: mf_redis_sine_sklearn_regressor_v1
-  requiredArtifacts:
-    - model
-    - x_scaler</pre>
-      </div>
-    </section>
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.cyber-container {
-  --cyan: #00f2ff;
-  --bg-deep: #010a12;
-  --panel-bg: rgba(2, 15, 26, 0.72);
-  --border-cyan: rgba(0, 242, 255, 0.32);
-  --border-cyan-strong: rgba(0, 242, 255, 0.72);
-  --text-white: rgba(255, 255, 255, 0.95);
-  --text-dim: rgba(255, 255, 255, 0.55);
+/* =========================================
+   赛博工业大屏 主题变量设定 (参考提供图像)
+   ========================================= */
+.dp-dashboard-container {
+  --dp-bg-base: #010A14;        /* 极暗蓝底色 */
+  --dp-bg-panel: rgba(2, 17, 34, 0.75); /* 面板半透明底色 */
+  --dp-cyan-main: #00F2FE;      /* 主亮青色 */
+  --dp-cyan-dark: rgba(0, 242, 254, 0.2); 
+  --dp-cyan-border: rgba(0, 242, 254, 0.35);
+  
+  --dp-text-main: #E5EAF3;      /* 主文本色 */
+  --dp-text-label: #6B8B9E;     /* 柔和的标签灰蓝色 */
+  --dp-text-muted: #4B6373;
+  
+  --dp-color-success: #00FFB2;  /* 成功绿 */
+  --dp-color-warn: #FDB100;     /* 警告黄 */
+  --dp-color-error: #FF4D4F;    /* 错误红 */
+
   min-height: 100vh;
-  padding: 40px 20px;
-  color: var(--text-white);
-  background:
-    linear-gradient(rgba(0, 242, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 242, 255, 0.03) 1px, transparent 1px),
-    var(--bg-deep);
-  background-size: 30px 30px;
+  padding: 24px;
+  background-color: var(--dp-bg-base);
+  /* 工业网格背景 */
+  background-image: 
+    linear-gradient(rgba(0, 242, 254, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 242, 254, 0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+  color: var(--dp-text-main);
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  box-sizing: border-box;
 }
 
-.panel {
-  max-width: 1280px;
-  margin: 0 auto;
+*, *::before, *::after { box-sizing: inherit; }
+
+/* 工具类 */
+.dp-mt-4 { margin-top: 20px; }
+.dp-mb-4 { margin-bottom: 20px; }
+.highlight-cyan { color: var(--dp-cyan-main); font-weight: bold; }
+.highlight-code { color: var(--dp-color-warn); font-family: "Courier New", monospace; }
+.dp-text-muted { color: var(--dp-text-muted); }
+.dp-text-error { color: var(--dp-color-error); }
+
+/* =========================================
+   头部栏 (图顶部的标题与按钮)
+   ========================================= */
+.dp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--dp-cyan-border);
   position: relative;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-cyan);
-  padding: 34px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
-
-[class^="corner-"] { position: absolute; width: 15px; height: 15px; border: 2px solid var(--cyan); }
-.corner-tl { top: -2px; left: -2px; border-right: 0; border-bottom: 0; }
-.corner-tr { top: -2px; right: -2px; border-left: 0; border-bottom: 0; }
-.corner-bl { bottom: -2px; left: -2px; border-right: 0; border-top: 0; }
-.corner-br { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
-
-.intro { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 28px; }
-.intro-actions { display: flex; gap: 12px; flex-wrap: wrap; }
-.eyebrow, .section-tag { font-size: 11px; letter-spacing: 3px; color: var(--cyan); margin: 0 0 10px; }
-.page-title { margin: 0 0 8px; font-size: 28px; color: #fff; }
-.page-desc { margin: 0; color: var(--text-dim); font-size: 13px; }
-
-.layout-grid { display: grid; grid-template-columns: 360px 1fr; gap: 24px; }
-.instance-list, .binding-panel, .hint-panel {
-  background: rgba(1, 10, 18, 0.7);
-  border: 1px solid var(--border-cyan);
-  padding: 20px;
+.dp-header::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 120px;
+  height: 2px;
+  background: var(--dp-cyan-main);
+  box-shadow: 0 0 10px var(--dp-cyan-main);
 }
+.dp-main-title {
+  margin: 0;
+  font-size: 24px;
+  color: var(--dp-cyan-main);
+  letter-spacing: 2px;
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(0, 242, 254, 0.4);
+}
+.dp-sub-title {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--dp-text-label);
+  letter-spacing: 1px;
+}
+.dp-header-actions { display: flex; gap: 12px; }
 
-.instance-card {
-  width: 100%;
-  display: grid;
-  gap: 6px;
-  margin-bottom: 10px;
-  padding: 14px;
-  text-align: left;
-  color: var(--text-white);
-  border: 1px solid rgba(0, 242, 255, 0.18);
-  background: rgba(0, 242, 255, 0.04);
+/* 头部小按钮 */
+.dp-btn-icon {
+  background: transparent;
+  border: 1px solid var(--dp-cyan-border);
+  color: var(--dp-cyan-main);
+  padding: 6px 16px;
+  font-size: 13px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+  border-radius: 2px;
 }
-.instance-card.active {
-  border-color: var(--border-cyan-strong);
-  background: rgba(0, 242, 255, 0.12);
-  box-shadow: inset 0 0 18px rgba(0, 242, 255, 0.12);
+.dp-btn-icon:hover:not(:disabled) {
+  background: var(--dp-cyan-dark);
+  border-color: var(--dp-cyan-main);
+  box-shadow: 0 0 8px var(--dp-cyan-dark);
 }
-.instance-card .name { font-weight: 800; }
-.instance-card .meta { color: var(--text-dim); font-size: 12px; }
-.status { width: fit-content; font-size: 11px; padding: 2px 8px; border: 1px solid rgba(255,255,255,.18); }
-.status-online { color: #00ffcc; }
-.status-ok { color: #86efac; }
-.status-warn { color: #fde68a; }
-.status-error { color: #ff7777; }
-.status-muted { color: var(--text-dim); }
+.dp-btn-icon:disabled { opacity: 0.5; cursor: not-allowed; border-color: var(--dp-text-muted); color: var(--dp-text-muted); }
 
-.selected-box, .requirement-box, .warning-panel, .health-card {
+/* =========================================
+   通知横幅 (Alerts)
+   ========================================= */
+.dp-alert {
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  border-left: 3px solid transparent;
+  background: rgba(0,0,0,0.4);
+}
+.dp-alert-error { border-color: var(--dp-color-error); color: var(--dp-color-error); background: rgba(255, 77, 79, 0.1); }
+.dp-alert-success { border-color: var(--dp-color-success); color: var(--dp-color-success); background: rgba(0, 255, 178, 0.1); }
+.dp-alert-warn { border-color: var(--dp-color-warn); color: var(--dp-color-warn); background: rgba(253, 177, 0, 0.1); }
+.blink { animation: dp-blink 1.5s infinite; margin-right: 8px; }
+@keyframes dp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* =========================================
+   网格与面板基础 (Panel Widgets)
+   ========================================= */
+.dp-layout-grid {
   display: grid;
-  gap: 7px;
-  margin-bottom: 18px;
-  padding: 16px;
-  border-left: 3px solid var(--cyan);
-  background: rgba(0, 242, 255, 0.06);
+  grid-template-columns: 320px 1fr;
+  gap: 24px;
+  align-items: start;
 }
-.requirement-box.blocked, .warning-panel, .health-error {
-  border-left-color: #ff7777;
-  background: rgba(255, 77, 77, 0.08);
+.dp-inner-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
 }
-.health-ok { border-left-color: #00ffcc; background: rgba(0, 255, 204, 0.06); }
-.health-muted { border-left-color: rgba(255,255,255,.28); background: rgba(255, 255, 255, 0.04); }
-.health-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
-.health-badge { color: var(--cyan); font-family: "Courier New", monospace; font-size: 12px; border: 1px solid rgba(0,242,255,.3); padding: 3px 8px; }
-.health-ok-text { color: #00ffcc; margin: 0; }
-.issue-list { display: grid; gap: 8px; }
-.issue-item { display: grid; gap: 4px; padding: 10px; border: 1px solid rgba(255, 119, 119, .3); background: rgba(255, 119, 119, .08); }
-.issue-warn { border-color: rgba(253, 230, 138, .35); background: rgba(253, 230, 138, .08); }
-.issue-error code { color: #ff7777; }
-.issue-warn code { color: #fde68a; }
-.selected-box label, .requirement-box label, .model-summary label, .binding-grid label, .field span, .health-card label {
-  color: var(--text-dim);
-  font-size: 11px;
+
+.dp-panel {
+  background: var(--dp-bg-panel);
+  border: 1px solid var(--dp-cyan-border);
+  padding: 20px;
+  position: relative;
+  /* 类似大屏组件的角部高亮 */
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+.dp-panel::before {
+  content: '';
+  position: absolute;
+  top: -1px; left: -1px;
+  width: 10px; height: 10px;
+  border-top: 2px solid var(--dp-cyan-main);
+  border-left: 2px solid var(--dp-cyan-main);
+}
+.dp-panel::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; right: -1px;
+  width: 10px; height: 10px;
+  border-bottom: 2px solid var(--dp-cyan-main);
+  border-right: 2px solid var(--dp-cyan-main);
+}
+
+.dp-panel-title {
+  font-size: 14px;
+  color: var(--dp-cyan-main);
+  font-weight: bold;
+  margin-bottom: 16px;
   letter-spacing: 1px;
 }
 
-.form-grid, .model-summary, .binding-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+.dp-empty-state {
+  color: var(--dp-text-muted);
+  text-align: center;
+  padding: 30px 0;
+  font-size: 13px;
+  letter-spacing: 1px;
 }
-.field { display: grid; gap: 8px; }
-.field.full, .model-summary .full, .binding-grid .full { grid-column: span 2; }
-select {
+
+/* =========================================
+   左侧：实例列表
+   ========================================= */
+.dp-instance-list { display: flex; flex-direction: column; gap: 8px; }
+.dp-instance-item {
   width: 100%;
-  box-sizing: border-box;
-  color: var(--text-white);
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid var(--border-cyan);
-  padding: 10px 12px;
-  outline: none;
-}
-select:focus { border-color: var(--border-cyan-strong); }
-
-.model-summary, .current-binding, .hint-panel, .raw-details { margin-top: 22px; }
-.model-summary > div, .binding-grid > div {
-  display: grid;
-  gap: 7px;
-  padding: 14px;
-  background: rgba(0, 0, 0, 0.28);
-  border: 1px solid rgba(0, 242, 255, 0.16);
-}
-code, pre {
-  color: var(--cyan);
-  font-family: "Courier New", monospace;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-pre { margin: 0; font-size: 12px; line-height: 1.6; }
-.raw-details { border: 1px solid rgba(0,242,255,.18); padding: 12px; background: rgba(0,0,0,.24); }
-.raw-details summary { cursor: pointer; color: var(--cyan); margin-bottom: 10px; }
-
-.action-row { display: flex; justify-content: flex-end; gap: 14px; margin-top: 24px; }
-.cyber-submit-btn, .cyber-button-outline, .danger-btn {
-  border: 1px solid var(--cyan);
-  color: var(--cyan);
-  background: rgba(0, 242, 255, 0.05);
-  padding: 10px 20px;
-  cursor: pointer;
-  font-weight: 800;
-}
-.cyber-submit-btn {
-  color: #000;
-  background: var(--cyan);
-  clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
-}
-.danger-btn { border-color: rgba(255, 77, 77, 0.6); color: #ff7777; background: rgba(255, 77, 77, 0.08); }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.error-banner, .success-banner {
-  margin-bottom: 18px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(107, 139, 158, 0.3);
   padding: 12px;
-  font-family: monospace;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: var(--dp-text-main);
+}
+.dp-instance-item:hover { border-color: var(--dp-cyan-border); background: rgba(0, 242, 254, 0.05); }
+.dp-instance-item.active {
+  border-color: var(--dp-cyan-main);
+  background: var(--dp-cyan-dark);
+  box-shadow: inset 0 0 10px rgba(0, 242, 254, 0.1);
+}
+.item-main { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.item-name { font-weight: bold; font-size: 14px; }
+.item-meta { font-size: 12px; color: var(--dp-text-label); }
+.item-status { font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+
+/* 状态颜色 */
+.status-online { color: var(--dp-color-success); }
+.status-online .status-dot { background: var(--dp-color-success); box-shadow: 0 0 5px var(--dp-color-success); }
+.status-ok { color: var(--dp-cyan-main); }
+.status-ok .status-dot { background: var(--dp-cyan-main); }
+.status-warn { color: var(--dp-color-warn); }
+.status-warn .status-dot { background: var(--dp-color-warn); }
+.status-error { color: var(--dp-color-error); }
+.status-error .status-dot { background: var(--dp-color-error); }
+.status-muted { color: var(--dp-text-muted); }
+.status-muted .status-dot { background: var(--dp-text-muted); }
+
+/* =========================================
+   右侧：键值对数据表 (参考图"基础运行信息")
+   ========================================= */
+.dp-kv-list { display: flex; flex-direction: column; }
+.dp-kv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 13px;
 }
-.error-banner { color: #ff7777; border: 1px solid rgba(255, 77, 77, 0.35); background: rgba(255, 77, 77, 0.06); }
-.success-banner { color: #00ffcc; border: 1px solid rgba(0, 255, 204, 0.35); background: rgba(0, 255, 204, 0.06); }
-.empty { color: var(--text-dim); padding: 18px 0; }
-.blink { animation: blink 1s infinite; font-weight: bold; margin-right: 8px; }
-@keyframes blink { 50% { opacity: 0; } }
+.dp-kv-row:last-child { border-bottom: none; }
+.dp-kv-label { color: var(--dp-text-label); }
+.dp-kv-value { color: var(--dp-text-main); text-align: right; word-break: break-all; max-width: 65%; }
 
-@media (max-width: 980px) {
-  .layout-grid { grid-template-columns: 1fr; }
-  .intro { flex-direction: column; align-items: flex-start; }
-  .form-grid, .model-summary, .binding-grid { grid-template-columns: 1fr; }
-  .field.full, .model-summary .full, .binding-grid .full { grid-column: span 1; }
+/* =========================================
+   健康状态面板
+   ========================================= */
+.dp-health-board { padding: 14px; border: 1px solid transparent; background: rgba(0,0,0,0.2); }
+.dp-health-board.health-ok { border-color: rgba(0, 255, 178, 0.3); }
+.dp-health-board.health-error { border-color: rgba(255, 77, 79, 0.3); background: rgba(255, 77, 79, 0.05); }
+.dp-health-board.health-muted { border-color: rgba(255, 255, 255, 0.1); }
+
+.health-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 10px; }
+.health-title { font-weight: bold; font-size: 14px; }
+.health-badge { font-family: monospace; font-size: 12px; padding: 2px 6px; background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+.health-ok .health-title { color: var(--dp-color-success); }
+.health-error .health-title { color: var(--dp-color-error); }
+.health-ok .health-badge { color: var(--dp-color-success); border: 1px solid var(--dp-color-success); }
+.health-error .health-badge { color: var(--dp-color-error); border: 1px solid var(--dp-color-error); }
+
+.health-ok-text { color: var(--dp-color-success); font-size: 13px; margin: 0; }
+
+.dp-issue-box { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.issue-item { display: flex; flex-direction: column; padding: 8px 10px; font-size: 12px; border-left: 2px solid; background: rgba(0,0,0,0.3); }
+.issue-error { border-left-color: var(--dp-color-error); }
+.issue-warn { border-left-color: var(--dp-color-warn); }
+.issue-code { font-family: monospace; color: var(--dp-text-label); margin-bottom: 4px; }
+.issue-error .issue-code { color: var(--dp-color-error); }
+.issue-warn .issue-code { color: var(--dp-color-warn); }
+.issue-msg { color: var(--dp-text-main); }
+
+/* =========================================
+   表单与操作区
+   ========================================= */
+.dp-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.dp-form-group { display: flex; flex-direction: column; gap: 8px; }
+.dp-form-label { color: var(--dp-text-label); font-size: 12px; }
+.dp-select-wrapper { position: relative; }
+.dp-select {
+  width: 100%;
+  appearance: none;
+  background: #030F1A;
+  border: 1px solid var(--dp-cyan-border);
+  color: var(--dp-text-main);
+  padding: 10px 12px;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.dp-select:focus { border-color: var(--dp-cyan-main); box-shadow: 0 0 5px var(--dp-cyan-dark); }
+.dp-select:disabled { opacity: 0.5; cursor: not-allowed; background: rgba(0,0,0,0.5); }
+/* 自定义下拉箭头 */
+.dp-select-wrapper::after {
+  content: '▼';
+  font-size: 10px;
+  color: var(--dp-cyan-main);
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.dp-action-bar { display: flex; justify-content: flex-end; gap: 16px; border-top: 1px dashed rgba(0, 242, 254, 0.2); padding-top: 20px; }
+.dp-btn {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  border: 1px solid transparent;
+  display: flex; align-items: center; gap: 8px;
+  transition: all 0.2s;
+  letter-spacing: 1px;
+}
+.dp-btn:disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(1); }
+
+.dp-btn-primary {
+  background: rgba(0, 242, 254, 0.1);
+  border-color: var(--dp-cyan-main);
+  color: var(--dp-cyan-main);
+}
+.dp-btn-primary:hover:not(:disabled) {
+  background: var(--dp-cyan-main);
+  color: var(--dp-bg-base);
+  box-shadow: 0 0 15px var(--dp-cyan-dark);
+}
+
+.dp-btn-danger {
+  background: rgba(255, 77, 79, 0.05);
+  border-color: rgba(255, 77, 79, 0.5);
+  color: var(--dp-color-error);
+}
+.dp-btn-danger:hover:not(:disabled) {
+  background: rgba(255, 77, 79, 0.2);
+  border-color: var(--dp-color-error);
+}
+
+/* =========================================
+   其他细节 (代码与日志展开)
+   ========================================= */
+.dp-raw-details {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--dp-text-muted);
+  padding: 12px;
+}
+.dp-raw-details summary {
+  color: var(--dp-text-label);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.dp-raw-details pre {
+  margin: 10px 0 0;
+  color: var(--dp-color-warn);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: monospace;
+}
+
+/* 响应式降级 */
+@media (max-width: 1100px) {
+  .dp-layout-grid { grid-template-columns: 260px 1fr; }
+  .dp-inner-grid-2 { grid-template-columns: 1fr; gap: 16px; }
+}
+@media (max-width: 850px) {
+  .dp-layout-grid { grid-template-columns: 1fr; }
+  .dp-col-left { max-height: 300px; overflow-y: auto; }
 }
 </style>

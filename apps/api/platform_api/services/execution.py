@@ -1,3 +1,4 @@
+import os
 import subprocess
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -255,12 +256,18 @@ def resolve_instance_lock_ttl_sec(*, instance_id: int, store: MetadataStore | No
 
 def _execute_via_runtime_bridge(*, package_dir: Path, manifest: PluginManifest, payload: dict[str, Any], trigger_type: str, run_id: str, runtime_env: dict[str, str] | None = None) -> RustRunnerResult:
     effective_env = dict(runtime_env or {})
+    entry = manifest.spec.entry
+    entry_type = str(getattr(entry, 'entry_type', 'file') or 'file').strip().lower()
+    entry_file = entry.file or ''
+    entry_module = entry.module or None
+    if entry_type == 'module' and not entry_module:
+        entry_module = entry_file or None
     try:
         bridge = RustRunnerBridge()
         return bridge.execute_function(
             package_dir=package_dir,
-            entry_file=manifest.spec.entry.file or '',
-            callable_name=manifest.spec.entry.callable or '',
+            entry_file=entry_file,
+            callable_name=entry.callable or '',
             payload=payload,
             timeout_sec=int(manifest.spec.runtime.timeout_sec),
             memory_mb=manifest.spec.runtime.memory_mb,
@@ -271,16 +278,28 @@ def _execute_via_runtime_bridge(*, package_dir: Path, manifest: PluginManifest, 
             task_id=run_id,
             run_id=run_id,
             trigger_type=trigger_type,
+            entry_type=entry_type,
+            entry_module=entry_module,
         )
-    except RustRunnerBinaryNotFound:
+    except RustRunnerBinaryNotFound as exc:
+        if not _python_fallback_enabled():
+            raise RustRunnerBridgeError(
+                'Rust runner binary not found and Python fallback is disabled. '
+                'Set PLATFORM_RUNNER_ALLOW_PYTHON_FALLBACK=true only for local development.'
+            ) from exc
         local = LocalPythonRunner().execute_function(
             package_dir=package_dir,
-            entry_file=manifest.spec.entry.file or "",
-            callable_name=manifest.spec.entry.callable or "",
+            entry_file=entry_file,
+            callable_name=entry.callable or "",
             payload=payload,
             timeout_sec=manifest.spec.runtime.timeout_sec,
         )
         return RustRunnerResult(status=local.status, outputs=local.outputs, logs=local.logs, metrics=local.metrics, stderr=local.stderr, returncode=local.returncode, backend='python_runner_fallback', raw_status=local.status)
+
+
+def _python_fallback_enabled() -> bool:
+    value = os.getenv('PLATFORM_RUNNER_ALLOW_PYTHON_FALLBACK', '').strip().lower()
+    return value in {'1', 'true', 'yes', 'on'}
 
 
 def _record_failed_instance_run(*, metadata_store: MetadataStore, instance: dict[str, Any], trigger_type: str, inputs: dict[str, Any], error_code: str, error_message: str) -> dict[str, Any]:
@@ -325,7 +344,7 @@ def _safe_parse_iso(value: Any) -> datetime | None:
     if not text:
         return None
     try:
-        dt = datetime.fromisoformat(text)
+        dt = datetime.fromisoformat(text.replace('Z', '+00:00'))
     except ValueError:
         return None
     if dt.tzinfo is None:

@@ -93,14 +93,34 @@ async def upload_package(
     except PackageStorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    signature_verification = dict(record.signature_verification or {})
     registration = metadata_store.register_package_upload(record)
     metadata_store.record_audit_event(
         event_type='security.package.uploaded',
         target_type='plugin_version',
         target_id=str(registration.version_id),
         actor=principal.username,
-        details={'filename': filename, 'package': record.manifest.metadata.name, 'version': record.manifest.metadata.version},
+        details={
+            'filename': filename,
+            'package': record.manifest.metadata.name,
+            'version': record.manifest.metadata.version,
+            'signature_status': signature_verification.get('status'),
+            'signature_key_id': signature_verification.get('key_id'),
+        },
     )
+    if signature_verification.get('status') in {'not_present', 'failed_warn'}:
+        metadata_store.record_audit_event(
+            event_type='security.package.signature_warning',
+            target_type='plugin_version',
+            target_id=str(registration.version_id),
+            actor=principal.username,
+            details={
+                'filename': filename,
+                'package': record.manifest.metadata.name,
+                'version': record.manifest.metadata.version,
+                'signature_verification': signature_verification,
+            },
+        )
 
     return {
         'asset_type': 'plugin',
@@ -113,6 +133,8 @@ async def upload_package(
         'digest': record.digest,
         'package_dir': str(record.package_dir),
         'manifest': record.manifest.model_dump(by_alias=True),
+        'signature_status': signature_verification.get('status', ''),
+        'signature_verification': signature_verification,
     }
 
 

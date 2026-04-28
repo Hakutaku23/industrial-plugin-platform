@@ -5,9 +5,10 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::{setsid, Pid};
@@ -510,12 +511,5 @@ fn read_text_tail(path: &Path, max_bytes: usize) -> Option<String> {
 }
 
 fn iso_now() -> String {
-    unix_now_sec().to_string()
-}
-
-fn unix_now_sec() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }

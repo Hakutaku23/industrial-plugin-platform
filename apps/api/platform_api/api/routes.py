@@ -14,6 +14,7 @@ from platform_api.api import (
     system,
     system_settings,
     templates,
+    runtime_diagnostics,
 )
 
 router = APIRouter()
@@ -32,5 +33,6 @@ for module in (
     runs,
     system_settings,
     internal_scheduler,
+    runtime_diagnostics,
 ):
     router.include_router(module.router)
