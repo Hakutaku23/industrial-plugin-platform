@@ -64,6 +64,7 @@ onUnmounted(() => {
             <RouterLink v-if="can('datasource.read')" to="/data-sources">数据源管理</RouterLink>
             <RouterLink v-if="can('instance.read')" to="/instances">实例管理</RouterLink>
             <RouterLink v-if="can('instance.read')" to="/instances/model-binding">模型绑定</RouterLink>
+            <RouterLink v-if="can('instance.read')" to="/model-updates">模型更新</RouterLink>
           </div>
         </div>
 

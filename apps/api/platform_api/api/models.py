@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from platform_api.security import Principal, require_permission
 from platform_api.services.model_audit import record_model_audit_event
 from platform_api.services.model_binding_guard import ModelBindingGuard
+from platform_api.services.model_deletion import ModelDeletionError, ModelDeletionService
 from platform_api.services.model_errors import ModelOperationError, model_error
 from platform_api.services.model_registry import ModelRegistry, ModelRegistryError
 
@@ -29,6 +30,12 @@ class RollbackRequest(BaseModel):
     reason: str = "manual rollback"
 
 
+class DeleteModelRequest(BaseModel):
+    force: bool = False
+    delete_files: bool = True
+    reason: str = "manual model delete"
+
+
 def registry() -> ModelRegistry:
     return ModelRegistry()
 
@@ -37,12 +44,20 @@ def guard() -> ModelBindingGuard:
     return ModelBindingGuard()
 
 
+def deletion_service() -> ModelDeletionService:
+    return ModelDeletionService()
+
+
 def _raise_model_operation_error(exc: ModelOperationError) -> None:
     raise HTTPException(status_code=exc.http_status, detail=exc.to_detail()) from exc
 
 
 def _raise_registry_error(exc: ModelRegistryError, *, code: str = "E_MODEL_OPERATION_FAILED", status_code: int = 400) -> None:
     raise HTTPException(status_code=status_code, detail={"code": code, "message": str(exc)}) from exc
+
+
+def _raise_deletion_error(exc: ModelDeletionError) -> None:
+    raise HTTPException(status_code=exc.http_status, detail=exc.to_detail()) from exc
 
 
 @router.get("/models")
@@ -56,6 +71,55 @@ def get_model(model_id: int, principal: Principal = Depends(require_permission("
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "E_MODEL_NOT_FOUND", "message": f"model not found: {model_id}"})
     return result
+
+
+@router.get("/models/{model_id}/delete-check")
+def check_model_delete(model_id: int, principal: Principal = Depends(require_permission("package.read"))) -> dict[str, Any]:
+    try:
+        return deletion_service().check_delete(model_id)
+    except ModelDeletionError as exc:
+        _raise_deletion_error(exc)
+
+
+@router.delete("/models/{model_id}")
+def delete_model(
+    model_id: int,
+    payload: DeleteModelRequest | None = None,
+    principal: Principal = Depends(require_permission("package.delete")),
+) -> dict[str, Any]:
+    request = payload or DeleteModelRequest()
+    try:
+        result = deletion_service().delete_model(
+            model_id=model_id,
+            force=request.force,
+            delete_files=request.delete_files,
+            actor=principal.username,
+            reason=request.reason,
+        )
+        record_model_audit_event(
+            event_type="model.deleted",
+            target_type="model",
+            target_id=str(model_id),
+            actor=principal.username,
+            details={
+                "model_id": model_id,
+                "model_name": result.get("model_name"),
+                "delete_files": result.get("delete_files"),
+                "deleted_files": result.get("deleted_files"),
+                "reason": request.reason,
+                "preflight": result.get("preflight"),
+            },
+        )
+        return result
+    except ModelDeletionError as exc:
+        record_model_audit_event(
+            event_type="model.delete_rejected",
+            target_type="model",
+            target_id=str(model_id),
+            actor=principal.username,
+            details={"model_id": model_id, "reason": request.reason, "error": exc.to_detail()},
+        )
+        _raise_deletion_error(exc)
 
 
 @router.get("/models/{model_id}/versions")

@@ -9,6 +9,7 @@ from platform_api.middleware import configure_middlewares
 from platform_api.services.database_cleanup import database_cleanup_service
 from platform_api.services.license_manager import license_manager
 from platform_api.services.metadata_store import MetadataStore
+from platform_api.services.model_update_scheduler import model_update_scheduler_service
 from platform_api.services.run_directory_cleanup import run_directory_cleanup_service
 from platform_api.services.scheduler import scheduler
 from platform_api.security import make_password_hash
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     run_directory_cleanup_service.start()
     database_cleanup_service.start()
+    model_update_scheduler_service.start()
     if settings.scheduler.enabled:
         scheduler.start()
     try:
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if settings.scheduler.enabled:
             scheduler.stop()
+        model_update_scheduler_service.stop()
         database_cleanup_service.stop()
         run_directory_cleanup_service.stop()
 

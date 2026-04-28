@@ -95,15 +95,11 @@ class EntrySpec(BaseModel):
         if self.mode == "function":
             if not self.callable:
                 raise ValueError("function entry requires callable")
-            if self.entry_type == "file":
-                if not self.file:
-                    raise ValueError("function file entry requires file")
-            elif self.entry_type == "module":
+            if self.entry_type == "file" and not self.file:
+                raise ValueError("function file entry requires file")
+            if self.entry_type == "module":
                 if not self.module:
                     raise ValueError("function module entry requires module")
-                # Compatibility shim: existing execution code passes entry.file to the runner.
-                # For module entries, keep file populated with module path until the whole
-                # execution protocol is fully moved to entry_type/entry_module fields.
                 if not self.file:
                     self.file = self.module
         if self.mode in {"cli", "service"} and not self.command:
@@ -141,7 +137,6 @@ class RuntimeSpec(BaseModel):
 class ScheduleSpec(BaseModel):
     type: Literal["manual", "interval", "cron", "event", "service"]
     interval_sec: int | None = Field(default=None, alias="intervalSec")
-
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
@@ -155,7 +150,6 @@ class InterfaceSpec(BaseModel):
     schema_: dict[str, Any] | None = Field(default=None, alias="schema")
     limits: dict[str, Any] | None = None
     quality_aware: bool | None = Field(default=None, alias="qualityAware")
-
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @field_validator("name")
@@ -171,7 +165,6 @@ class PermissionsSpec(BaseModel):
     filesystem: Literal["scoped", "none", "readonly"] = "scoped"
     writeback: bool = False
     subprocess: bool = False
-
     model_config = ConfigDict(extra="allow")
 
 
@@ -184,7 +177,6 @@ class PluginSpec(BaseModel):
     inputs: list[InterfaceSpec]
     outputs: list[InterfaceSpec]
     permissions: PermissionsSpec
-
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -192,7 +184,6 @@ class CompatibilitySpec(BaseModel):
     platform_api: str = Field(alias="platformApi")
     runner_api: str = Field(alias="runnerApi")
     supported_environments: list[str] = Field(default_factory=list, alias="supportedEnvironments")
-
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -202,7 +193,6 @@ class ModelDependencySpec(BaseModel):
     model_name: str | None = Field(default=None, alias="modelName")
     role: str | None = None
     required_artifacts: list[str] = Field(default_factory=list, alias="requiredArtifacts")
-
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @field_validator("family_fingerprint")
@@ -213,6 +203,33 @@ class ModelDependencySpec(BaseModel):
         return value
 
 
+class ModelUpdateSpec(BaseModel):
+    enabled: bool = False
+    role: Literal["trainer", "evaluator", "updater"] = "trainer"
+    family_fingerprint: str | None = Field(default=None, alias="familyFingerprint")
+    required_artifacts: list[str] = Field(default_factory=list, alias="requiredArtifacts")
+    output_schema: str = Field(default="ipp-model/v1", alias="outputSchema")
+    candidate_dir_name: str = Field(default="candidate_model", alias="candidateDirName")
+    current_model_dir_name: str = Field(default="current_model", alias="currentModelDirName")
+    promote_mode: Literal["manual", "auto_if_passed"] = Field(default="manual", alias="promoteMode")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    @field_validator("family_fingerprint")
+    @classmethod
+    def validate_family_fingerprint(cls, value: str | None) -> str | None:
+        if value is not None and not str(value).strip():
+            raise ValueError("modelUpdate.familyFingerprint must not be empty")
+        return value
+
+    @field_validator("candidate_dir_name", "current_model_dir_name")
+    @classmethod
+    def validate_dir_name(cls, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized or "/" in normalized or "\\" in normalized or normalized in {".", ".."}:
+            raise ValueError("modelUpdate directory names must be safe single path segments")
+        return normalized
+
+
 class PluginManifest(BaseModel):
     api_version: Literal["plugin.platform/v1", "plugin.platform/v2"] = Field(alias="apiVersion")
     kind: Literal["PluginPackage"]
@@ -221,7 +238,7 @@ class PluginManifest(BaseModel):
     compatibility: CompatibilitySpec
     config_schema: dict[str, Any] | None = Field(default=None, alias="configSchema")
     model_dependency: ModelDependencySpec | None = Field(default=None, alias="modelDependency")
-
+    model_update: ModelUpdateSpec | None = Field(default=None, alias="modelUpdate")
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -230,10 +247,8 @@ def parse_manifest_text(content: str) -> PluginManifest:
         raw = yaml.safe_load(content)
     except yaml.YAMLError as exc:
         raise ManifestError(f"manifest.yaml is not valid YAML: {exc}") from exc
-
     if not isinstance(raw, dict):
         raise ManifestError("manifest.yaml must contain a YAML object")
-
     try:
         return PluginManifest.model_validate(raw)
     except ValidationError as exc:

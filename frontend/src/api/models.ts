@@ -78,6 +78,49 @@ export interface ModelBindingHealthRecord {
   checked_at?: string | null
 }
 
+export interface ModelDeleteIssue {
+  code: string
+  message: string
+  count?: number
+  active_version_id?: number | null
+}
+
+export interface ModelDeleteCheck {
+  model: {
+    id: number
+    model_name: string
+    display_name?: string | null
+    family_fingerprint?: string | null
+    status?: string | null
+    active_version_id?: number | null
+  }
+  deletable: boolean
+  requires_force: boolean
+  can_delete_with_force: boolean
+  blockers: ModelDeleteIssue[]
+  warnings: ModelDeleteIssue[]
+  references: Record<string, number>
+  storage: {
+    model_dir: string
+    exists: boolean
+    file_count: number
+    total_bytes: number
+  }
+}
+
+export interface ModelDeleteResult {
+  deleted: boolean
+  model_id: number
+  model_name: string
+  delete_files: boolean
+  deleted_files: boolean
+  trash_purged: boolean
+  reason: string
+  actor: string
+  deleted_at: string
+  preflight: ModelDeleteCheck
+}
+
 export async function listModels(): Promise<ModelSummary[]> {
   const payload = await apiFetch<{ items: ModelSummary[] }>('/api/v1/models')
   return payload.items
@@ -111,6 +154,27 @@ export async function rollbackModel(modelId: number, reason = 'manual rollback')
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason }),
+  })
+}
+
+export async function checkModelDelete(modelId: number): Promise<ModelDeleteCheck> {
+  return apiFetch<ModelDeleteCheck>(`/api/v1/models/${modelId}/delete-check`)
+}
+
+export async function deleteModel(payload: {
+  modelId: number
+  force?: boolean
+  delete_files?: boolean
+  reason?: string
+}): Promise<ModelDeleteResult> {
+  return apiFetch<ModelDeleteResult>(`/api/v1/models/${payload.modelId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      force: payload.force ?? false,
+      delete_files: payload.delete_files ?? true,
+      reason: payload.reason ?? 'manual model delete',
+    }),
   })
 }
 
